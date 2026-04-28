@@ -1,0 +1,63 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.next/
+out/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+*.pem
+*.key
+credentials/
+credential*
+
+# Database (local only)
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# IDE & editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test & coverage
+coverage/
+.nyc_output/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Golutra workspace config (local collaboration)
+.golutra/
+
+# Claude Code settings (local permission config)
+.claude/
+
+# Internal planning docs
+docs/PROJECT_PLAN.md
+
+# Playwright
+test-results/
+playwright-report/
+
+# Misc
+*.tmp
+*.bak
