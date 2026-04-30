@@ -9,6 +9,7 @@ import {
   WorkerScheduler,
   computeRetryDelayMs,
   createProviderSyncIdempotencyKey,
+  serializeWorkerError,
 } from '../../src/workers/index.js';
 import type {
   AnyConnectorConfig,
@@ -224,6 +225,53 @@ describe('InMemoryWorkerJobRepository', () => {
     await expect(repository.claimNext(baseDate, 'worker-a')).resolves.toBeNull();
   });
 
+  it('returns the existing job when enqueue sees a duplicate idempotency key', async () => {
+    const repository = new InMemoryWorkerJobRepository();
+    const queuedAt = baseDate.toISOString();
+
+    const first = await repository.enqueue({
+      id: 'job-1',
+      type: 'sync_provider_usage',
+      status: 'queued',
+      input: {
+        provider: 'openai',
+        accountId: 'credential-1',
+        startTime: 100,
+        endTime: 200,
+      },
+      idempotencyKey: 'duplicate-key',
+      attempts: 0,
+      maxAttempts: 3,
+      runAfter: queuedAt,
+      createdAt: queuedAt,
+      updatedAt: queuedAt,
+    });
+    const second = await repository.enqueue({
+      id: 'job-2',
+      type: 'sync_provider_usage',
+      status: 'queued',
+      input: {
+        provider: 'minimax',
+        accountId: 'credential-1',
+        startTime: 300,
+        endTime: 400,
+      },
+      idempotencyKey: 'duplicate-key',
+      attempts: 0,
+      maxAttempts: 3,
+      runAfter: queuedAt,
+      createdAt: queuedAt,
+      updatedAt: queuedAt,
+    });
+
+    expect(second).toMatchObject({
+      id: first.id,
+      idempotencyKey: 'duplicate-key',
+      input: first.input,
+    });
+    await expect(repository.list()).resolves.toHaveLength(1);
+  });
+
   it('claims the earliest claimable job and filters list(status)', async () => {
     const repository = new InMemoryWorkerJobRepository();
     const queuedAt = baseDate.toISOString();
@@ -293,6 +341,53 @@ describe('InMemoryWorkerJobRepository', () => {
     await expect(repository.list('running')).resolves.toHaveLength(2);
   });
 
+  it('orders claimable jobs by runAfter before createdAt', async () => {
+    const repository = new InMemoryWorkerJobRepository();
+    const claimTime = new Date(baseDate.getTime() + 120_000);
+    const earlierRunAfter = baseDate.toISOString();
+    const laterRunAfter = new Date(baseDate.getTime() + 60_000).toISOString();
+    const earlierCreatedAt = baseDate.toISOString();
+    const laterCreatedAt = new Date(baseDate.getTime() + 30_000).toISOString();
+
+    await repository.enqueue({
+      id: 'job-later',
+      type: 'sync_provider_usage',
+      status: 'queued',
+      input: {
+        provider: 'openai',
+        accountId: 'credential-1',
+        startTime: 100,
+        endTime: 200,
+      },
+      idempotencyKey: 'job-later-key',
+      attempts: 0,
+      maxAttempts: 3,
+      runAfter: laterRunAfter,
+      createdAt: earlierCreatedAt,
+      updatedAt: earlierCreatedAt,
+    });
+    await repository.enqueue({
+      id: 'job-earlier',
+      type: 'sync_provider_usage',
+      status: 'queued',
+      input: {
+        provider: 'minimax',
+        accountId: 'credential-1',
+        startTime: 300,
+        endTime: 400,
+      },
+      idempotencyKey: 'job-earlier-key',
+      attempts: 0,
+      maxAttempts: 3,
+      runAfter: earlierRunAfter,
+      createdAt: laterCreatedAt,
+      updatedAt: laterCreatedAt,
+    });
+
+    const claimed = await repository.claimNext(claimTime, 'worker-a');
+    expect(claimed?.id).toBe('job-earlier');
+  });
+
   it('updates state through complete and fail and filters list(status)', async () => {
     const repository = new InMemoryWorkerJobRepository();
     const queuedAt = baseDate.toISOString();
@@ -359,6 +454,77 @@ describe('InMemoryWorkerJobRepository', () => {
     await expect(repository.list('succeeded')).resolves.toHaveLength(1);
     await expect(repository.list('retry_scheduled')).resolves.toHaveLength(1);
     await expect(repository.list('queued')).resolves.toHaveLength(0);
+  });
+
+  it('throws when complete or fail targets a missing job', async () => {
+    const repository = new InMemoryWorkerJobRepository();
+
+    await expect(
+      repository.complete('missing', { records: [] }, baseDate),
+    ).rejects.toThrow('Worker job not found: missing');
+    await expect(
+      repository.fail('missing', 'boom', baseDate, baseDate),
+    ).rejects.toThrow('Worker job not found: missing');
+  });
+});
+
+describe('worker scheduler helpers', () => {
+  it('serializes plain worker errors as strings', () => {
+    expect(serializeWorkerError('plain failure')).toBe('plain failure');
+  });
+
+  it('fails unsupported job types through assertNever', async () => {
+    const repository = new InMemoryWorkerJobRepository();
+    const connectorFactory = new FakeConnectorFactory([]);
+    const secretsRepository = new InMemorySecureStorageRepository();
+    const secrets = new SecureSecretService(
+      secretsRepository,
+      new StaticKeyProvider(Buffer.alloc(32, 9)),
+      () => new Date(baseDate),
+      () => 'credential-1',
+    );
+    await secrets.saveCredential({
+      kind: 'api_key',
+      scope: { provider: 'openai', accountId: 'credential-1' },
+      value: 'opaque-worker-key',
+    });
+
+    await repository.enqueue({
+      id: 'job-invalid',
+      type: 'unsupported' as never,
+      status: 'queued',
+      input: {
+        provider: 'openai',
+        accountId: 'credential-1',
+        startTime: 100,
+        endTime: 200,
+      },
+      idempotencyKey: 'job-invalid-key',
+      attempts: 0,
+      maxAttempts: 3,
+      runAfter: baseDate.toISOString(),
+      createdAt: baseDate.toISOString(),
+      updatedAt: baseDate.toISOString(),
+    });
+
+    const invalidScheduler = new WorkerScheduler(
+      repository,
+      connectorFactory,
+      secrets,
+      {
+        workerId: 'worker-a',
+        now: () => new Date(baseDate),
+      },
+    );
+
+    await expect(invalidScheduler.runOnce()).resolves.toEqual({
+      processed: 1,
+      succeeded: 0,
+      failed: 1,
+    });
+
+    const retrying = await repository.list('retry_scheduled');
+    expect(retrying[0]?.lastError).toContain('Unsupported worker job type');
   });
 });
 
