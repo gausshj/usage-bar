@@ -14,7 +14,12 @@ export default [
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['src/security/**/*.ts', 'tests/**/*.ts'],
+    files: [
+      'src/security/**/*.ts',
+      'src/connectors/**/*.ts',
+      'src/workers/**/*.ts',
+      'tests/**/*.ts',
+    ],
     languageOptions: {
       globals: {
         Buffer: 'readonly',

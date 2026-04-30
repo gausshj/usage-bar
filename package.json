@@ -4,16 +4,29 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "eslint \"src/security/**/*.ts\" \"tests/**/*.ts\"",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint \"src/security/**/*.ts\" \"src/connectors/**/*.ts\" \"src/workers/**/*.ts\" \"tests/**/*.ts\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "coverage": "vitest run --coverage"
   },
+  "dependencies": {
+    "next": "^15.3.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@tailwindcss/postcss": "^4.1.5",
     "@types/node": "^24.10.1",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
     "@vitest/coverage-v8": "^4.1.5",
+    "autoprefixer": "^10.4.21",
     "eslint": "^9.39.1",
+    "tailwindcss": "^3.4.17",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.4",
     "vitest": "^4.0.13"
