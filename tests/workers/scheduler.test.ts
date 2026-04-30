@@ -38,6 +38,36 @@ describe('WorkerScheduler', () => {
     );
   });
 
+  it('stores explicit project, organization, runAfter, and maxAttempts values', async () => {
+    const scheduler = makeScheduler();
+    const input = {
+      provider: 'openai' as const,
+      accountId: 'credential-1',
+      startTime: 100,
+      endTime: 200,
+      projectId: 'project-1',
+      organizationId: 'organization-1',
+      runAfter: '2026-04-29T12:34:56.000Z',
+      maxAttempts: 5,
+    };
+
+    const job = await scheduler.enqueueProviderSync(input);
+    const stored = await scheduler.jobRepository.getById(job.id);
+
+    expect(stored).toMatchObject({
+      input: {
+        provider: 'openai',
+        accountId: 'credential-1',
+        startTime: 100,
+        endTime: 200,
+        projectId: 'project-1',
+        organizationId: 'organization-1',
+      },
+      runAfter: '2026-04-29T12:34:56.000Z',
+      maxAttempts: 5,
+    });
+  });
+
   it('claims and executes a provider sync job through the connector factory', async () => {
     const records: NormalizedRecord[] = [
       {
@@ -76,6 +106,16 @@ describe('WorkerScheduler', () => {
     });
   });
 
+  it('returns an empty result when no job is claimable', async () => {
+    const scheduler = makeScheduler();
+
+    await expect(scheduler.runOnce()).resolves.toEqual({
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+    });
+  });
+
   it('retries failed jobs and moves exhausted jobs to dead', async () => {
     const connectorFactory = new FakeConnectorFactory([], new Error('temporary'));
     const scheduler = makeScheduler({
@@ -108,6 +148,35 @@ describe('WorkerScheduler', () => {
     });
     const dead = await scheduler.jobRepository.list('dead');
     expect(dead[0]?.attempts).toBe(2);
+  });
+
+  it('moves exhausted jobs to dead when no retries remain', async () => {
+    const connectorFactory = new FakeConnectorFactory([], new Error('boom'));
+    const scheduler = makeScheduler({
+      connectorFactory,
+      maxAttempts: 1,
+    });
+
+    const job = await scheduler.enqueueProviderSync({
+      provider: 'zhipu',
+      accountId: 'credential-1',
+      startTime: 100,
+      endTime: 200,
+      maxAttempts: 1,
+    });
+
+    await expect(scheduler.runOnce()).resolves.toEqual({
+      processed: 1,
+      succeeded: 0,
+      failed: 1,
+    });
+
+    const stored = await scheduler.jobRepository.getById(job.id);
+    expect(stored).toMatchObject({
+      status: 'dead',
+      attempts: 1,
+      lastError: 'boom',
+    });
   });
 
   it('drains until no claimable jobs remain', async () => {
@@ -143,6 +212,153 @@ describe('WorkerScheduler', () => {
     expect(computeRetryDelayMs(1, 100, 1_000)).toBe(100);
     expect(computeRetryDelayMs(2, 100, 1_000)).toBe(200);
     expect(computeRetryDelayMs(10, 100, 1_000)).toBe(1_000);
+  });
+});
+
+describe('InMemoryWorkerJobRepository', () => {
+  it('returns null for missing lookups and claim attempts', async () => {
+    const repository = new InMemoryWorkerJobRepository();
+
+    await expect(repository.getById('missing')).resolves.toBeNull();
+    await expect(repository.getByIdempotencyKey('missing')).resolves.toBeNull();
+    await expect(repository.claimNext(baseDate, 'worker-a')).resolves.toBeNull();
+  });
+
+  it('claims the earliest claimable job and filters list(status)', async () => {
+    const repository = new InMemoryWorkerJobRepository();
+    const queuedAt = baseDate.toISOString();
+    const laterQueuedAt = new Date(baseDate.getTime() + 60_000).toISOString();
+
+    await repository.enqueue({
+      id: 'job-running',
+      type: 'sync_provider_usage',
+      status: 'running',
+      input: {
+        provider: 'openai',
+        accountId: 'credential-1',
+        startTime: 100,
+        endTime: 200,
+      },
+      idempotencyKey: 'job-running-key',
+      attempts: 0,
+      maxAttempts: 3,
+      runAfter: queuedAt,
+      createdAt: queuedAt,
+      updatedAt: queuedAt,
+    });
+    await repository.enqueue({
+      id: 'job-queued',
+      type: 'sync_provider_usage',
+      status: 'queued',
+      input: {
+        provider: 'minimax',
+        accountId: 'credential-1',
+        startTime: 300,
+        endTime: 400,
+      },
+      idempotencyKey: 'job-queued-key',
+      attempts: 0,
+      maxAttempts: 3,
+      runAfter: laterQueuedAt,
+      createdAt: laterQueuedAt,
+      updatedAt: laterQueuedAt,
+    });
+    await repository.enqueue({
+      id: 'job-retry',
+      type: 'sync_provider_usage',
+      status: 'retry_scheduled',
+      input: {
+        provider: 'zhipu',
+        accountId: 'credential-1',
+        startTime: 500,
+        endTime: 600,
+      },
+      idempotencyKey: 'job-retry-key',
+      attempts: 1,
+      maxAttempts: 3,
+      runAfter: queuedAt,
+      createdAt: queuedAt,
+      updatedAt: queuedAt,
+    });
+
+    const claimed = await repository.claimNext(baseDate, 'worker-a');
+    expect(claimed).toMatchObject({
+      id: 'job-retry',
+      status: 'running',
+      lockOwner: 'worker-a',
+    });
+
+    await expect(repository.list('queued')).resolves.toHaveLength(1);
+    await expect(repository.list('retry_scheduled')).resolves.toHaveLength(0);
+    await expect(repository.list('running')).resolves.toHaveLength(2);
+  });
+
+  it('updates state through complete and fail and filters list(status)', async () => {
+    const repository = new InMemoryWorkerJobRepository();
+    const queuedAt = baseDate.toISOString();
+    const retryAt = new Date(baseDate.getTime() + 60_000);
+
+    const completedJob = await repository.enqueue({
+      id: 'job-complete',
+      type: 'sync_provider_usage',
+      status: 'queued',
+      input: {
+        provider: 'openai',
+        accountId: 'credential-1',
+        startTime: 100,
+        endTime: 200,
+      },
+      idempotencyKey: 'job-complete-key',
+      attempts: 0,
+      maxAttempts: 3,
+      runAfter: queuedAt,
+      createdAt: queuedAt,
+      updatedAt: queuedAt,
+    });
+    const failedJob = await repository.enqueue({
+      id: 'job-fail',
+      type: 'sync_provider_usage',
+      status: 'queued',
+      input: {
+        provider: 'minimax',
+        accountId: 'credential-1',
+        startTime: 300,
+        endTime: 400,
+      },
+      idempotencyKey: 'job-fail-key',
+      attempts: 0,
+      maxAttempts: 3,
+      runAfter: queuedAt,
+      createdAt: queuedAt,
+      updatedAt: queuedAt,
+    });
+
+    const completed = await repository.complete(
+      completedJob.id,
+      { records: [] as NormalizedRecord[] },
+      baseDate,
+    );
+    const failed = await repository.fail(
+      failedJob.id,
+      'temporary',
+      retryAt,
+      baseDate,
+    );
+
+    expect(completed).toMatchObject({
+      status: 'succeeded',
+      result: { records: [] },
+    });
+    expect(failed).toMatchObject({
+      status: 'retry_scheduled',
+      attempts: 1,
+      lastError: 'temporary',
+      runAfter: retryAt.toISOString(),
+    });
+
+    await expect(repository.list('succeeded')).resolves.toHaveLength(1);
+    await expect(repository.list('retry_scheduled')).resolves.toHaveLength(1);
+    await expect(repository.list('queued')).resolves.toHaveLength(0);
   });
 });
 
