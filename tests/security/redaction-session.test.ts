@@ -27,6 +27,25 @@ describe('redaction utilities', () => {
     expect(serialized).toContain('visible');
   });
 
+  it('handles arrays, circular references, and primitive values', () => {
+    const circular: { token: string; self?: unknown } = {
+      token: 'opaque-value-token',
+    };
+    circular.self = circular;
+
+    expect(redactSensitive(42)).toBe(42);
+    expect(redactSensitive(null)).toBeNull();
+    expect(
+      redactSensitive([circular, `Authorization: ${bearerSample}`]),
+    ).toEqual([
+      {
+        token: '[REDACTED]',
+        self: '[Circular]',
+      },
+      'Authorization: [REDACTED]',
+    ]);
+  });
+
   it('redacts common secret-shaped strings inside messages', () => {
     expect(redactString(`Authorization: ${bearerSample}`)).toBe(
       'Authorization: [REDACTED]',
@@ -98,9 +117,32 @@ describe('session expiry helpers', () => {
         new Date('2026-05-01T00:00:00.000Z'),
       ),
     ).toBe(false);
+
+    expect(
+      isPlaywrightStorageStateExpired(
+        {
+          cookies: [],
+          origins: [
+            {
+              origin: 'https://example.test',
+              localStorage: [{ name: 'token', value: 'visible' }],
+            },
+          ],
+        },
+        new Date('2026-05-01T00:00:00.000Z'),
+      ),
+    ).toBe(false);
   });
 
   it('detects stored record expiry', () => {
+    expect(
+      isSecretRecordExpired(
+        {
+          status: 'expired',
+        },
+        new Date('2026-04-28T00:00:00.000Z'),
+      ),
+    ).toBe(true);
     expect(
       isSecretRecordExpired(
         {
