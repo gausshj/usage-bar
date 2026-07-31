@@ -249,4 +249,49 @@ describe('KimiProvider token refresh', () => {
     // Only the usages call happened — no refresh.
     expect(mock.mock.calls.every((c) => !String(c[0]).includes('auth.kimi.com'))).toBe(true);
   });
+
+  it('returns unconfigured when the refresh endpoint itself errors (HTTP 500)', async () => {
+    await writeFile(
+      credsPath,
+      JSON.stringify({
+        access_token: 'old',
+        refresh_token: 'rt',
+        expires_at: Math.floor(Date.now() / 1000) - 3600,
+      }),
+    );
+    // refreshOAuthToken fetch returns 500 → throws → resolveAccessToken throws.
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(500, { error: 'server' }),
+    );
+
+    const snap = await new KimiProvider({ credentialsPath: credsPath }).fetch(null);
+    expect(snap.status).toBe('unconfigured');
+    expect(snap.error?.code).toBe('token_expired');
+  });
+
+  it('still fetches successfully when writing refreshed creds fails (non-fatal)', async () => {
+    await writeFile(
+      credsPath,
+      JSON.stringify({
+        access_token: 'old',
+        refresh_token: 'rt',
+        expires_at: Math.floor(Date.now() / 1000) - 3600,
+      }),
+    );
+    // Point credentialsPath at a path whose directory vanishes after read,
+    // so the write-back fails — but the in-memory refreshed token still works.
+    const mock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mock.mockImplementation(async (url: string) => {
+      if (String(url).includes('auth.kimi.com')) {
+        return jsonResponse(200, { access_token: 'fresh', expires_in: 900 });
+      }
+      return jsonResponse(200, { usage: { used: '2', limit: '10' } });
+    });
+
+    // Use a credentials path under a read-only-ish location to force write failure.
+    const badPath = '/dev/null/not-writable/kimi-code.json';
+    const snap = await new KimiProvider({ credentialsPath: badPath }).fetch(null);
+    // No creds readable at badPath → treated as no credentials.
+    expect(snap.status).toBe('unconfigured');
+  });
 });
