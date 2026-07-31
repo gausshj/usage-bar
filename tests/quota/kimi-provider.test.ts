@@ -132,6 +132,21 @@ describe('KimiProvider', () => {
     expect(snap.error?.code).toBe('forbidden');
   });
 
+  it('falls back to stale when refresh fails but a prior ready snapshot exists', async () => {
+    let ok = true;
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      if (ok) return jsonResponse(200, { usage: { used: '1', limit: '10' } });
+      return jsonResponse(403, {});
+    });
+    const p = new KimiProvider({ accessToken: 't' });
+    const first = await p.fetch(null);
+    expect(first.status).toBe('ready');
+    ok = false;
+    const second = await p.fetch(first);
+    expect(second.status).toBe('stale');
+    expect(second.buckets.length).toBeGreaterThan(0); // kept old data
+  });
+
   it('maps a 404 to unsupported status', async () => {
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
       jsonResponse(404, {}),
