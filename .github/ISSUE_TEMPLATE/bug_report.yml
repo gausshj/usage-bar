@@ -1,67 +1,67 @@
-name: 🐛 Bug 报告
-description: 报告配额看板的错误行为或数据问题
+name: 🐛 Bug Report
+description: Report incorrect behavior or data problems in the quota dashboard
 title: "[Bug] "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        感谢报告问题。**请勿在 issue 中粘贴任何 token、API Key 或完整账号信息**——日志请先脱敏。
+        Thanks for reporting. **Never paste tokens, API keys, or full account identifiers into an issue** — redact logs before attaching them.
 
   - type: dropdown
     id: provider
     attributes:
-      label: 受影响的 Provider
-      description: 问题发生在哪个数据路径上？
+      label: Affected provider
+      description: Which data path is the problem on?
       multiple: true
       options:
-        - Codex（codex_chatgpt）
-        - GLM Coding Plan（glm_coding_plan）
-        - Kimi Code（kimi_code）
-        - 聚合 API / 共享层
-        - UI / 前端
-        - 其他
+        - Codex (codex_chatgpt)
+        - GLM Coding Plan (glm_coding_plan)
+        - Kimi Code (kimi_code)
+        - Aggregation API / shared layer
+        - UI / frontend
+        - Other
     validations:
       required: true
 
   - type: textarea
     id: description
     attributes:
-      label: 问题描述
-      description: 发生了什么？期望行为是什么？
+      label: What happened?
+      description: Describe the actual behavior and what you expected instead.
       placeholder: |
-        实际：…
-        期望：…
+        Actual: …
+        Expected: …
     validations:
       required: true
 
   - type: textarea
     id: reproduce
     attributes:
-      label: 复现步骤
+      label: Steps to reproduce
       placeholder: |
-        1. 配置 …
-        2. 运行 npm run dev
-        3. 打开首页 / 调用 /api/v1/quota
-        4. 看到 …
+        1. Configure …
+        2. Run npm run dev
+        3. Open the dashboard / call /api/v1/quota
+        4. Observe …
     validations:
       required: true
 
   - type: textarea
     id: evidence
     attributes:
-      label: 日志 / 响应 / 截图
-      description: 相关的 API 响应、控制台输出或截图（务必脱敏）
+      label: Logs / responses / screenshots
+      description: Relevant API responses, console output, or screenshots (must be redacted)
       render: text
 
   - type: textarea
     id: environment
     attributes:
-      label: 环境信息
+      label: Environment
       placeholder: |
         - OS: macOS 15.x
         - Node: v22.x
-        - 相关 CLI 版本（codex / kimi CLI）: …
-        - 数据源：official_protocol / official_compatibility / local_estimate
+        - Relevant CLI versions (codex / kimi CLI): …
+        - Data source: official_protocol / official_compatibility / local_estimate
     validations:
       required: true
