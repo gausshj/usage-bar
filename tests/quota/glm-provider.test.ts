@@ -85,4 +85,41 @@ describe('GlmProvider', () => {
     await new GlmProvider({ token: 't', region: 'zai' }).fetch(null);
     expect(mock.mock.calls[0][0]).toBe('https://api.z.ai/api/monitor/usage/quota/limit');
   });
+
+  it('maps an unknown limit type to an unknown-metric bucket (not dropped)', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, {
+        data: { limits: [{ type: 'FUTURE_LIMIT_TYPE', percentage: 5, unit: 9, number: 1 }] },
+      }),
+    );
+    const snap = await new GlmProvider({ token: 't' }).fetch(null);
+    expect(snap.status).toBe('ready');
+    expect(snap.buckets).toHaveLength(1);
+    expect(snap.buckets[0].metric).toBe('unknown'); // visibly distinct, not 'tokens'
+  });
+
+  it('returns a controlled error on malformed response shape (schema drift)', async () => {
+    // `data.limits` is a string instead of an array → schema rejects it.
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, { data: { limits: 'not-an-array' } }),
+    );
+    const snap = await new GlmProvider({ token: 't' }).fetch(null);
+    // Schema failure surfaces as an error status, not a crash or silent null.
+    expect(snap.status).not.toBe('ready');
+    expect(snap.error).toBeDefined();
+  });
+
+  it('tolerates extra unknown fields in the response (passthrough)', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, {
+        data: {
+          limits: [{ type: 'TOKENS_LIMIT', percentage: 10, unit: 3, number: 5 }],
+          newFutureField: { whatever: true },
+        },
+        extraRoot: 42,
+      }),
+    );
+    const snap = await new GlmProvider({ token: 't' }).fetch(null);
+    expect(snap.status).toBe('ready'); // unknown fields ignored, not rejected
+  });
 });

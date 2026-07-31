@@ -16,6 +16,11 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 import { fetchJson } from '../http.js';
+import {
+  parseWithSchema,
+  kimiUsagesResponseSchema,
+  type KimiUsagesResponseParsed,
+} from '../schemas.js';
 import type {
   QuotaBucket,
   QuotaBalance,
@@ -38,36 +43,15 @@ const SOURCE = { kind: 'official_compatibility' as const, name: 'Kimi Code usage
 const DEFAULT_BASE_URL = 'https://api.kimi.com/coding/v1';
 const DEFAULT_CREDENTIALS_PATH = `${homedir()}/.kimi-code/credentials/kimi-code.json`;
 
-// Raw response shapes (numbers come as decimal strings, units as enum strings)
+// Parsed response types derived from the zod schema (numbers come as decimal
+// strings, units as proto-style enum strings — normalized in the mappers below).
 
-interface RawUsageDetail {
-  used?: string;
-  limit?: string;
-  resetTime?: string;
-  name?: string;
-}
-interface RawUsageWindow {
-  duration?: number;
-  timeUnit?: string; // TIME_UNIT_MINUTE | HOUR | DAY | WEEK
-}
-interface RawLimitEntry {
-  window?: RawUsageWindow;
-  detail?: RawUsageDetail;
-}
-interface RawBoosterBalance {
-  type?: string;
-  amount?: number;
-  amountLeft?: number;
-}
-interface RawBoosterWallet {
-  balance?: RawBoosterBalance;
-  monthlyChargeLimitEnabled?: boolean;
-}
-interface RawUsagesResponse {
-  usage?: RawUsageDetail; // weekly summary
-  limits?: RawLimitEntry[];
-  boosterWallet?: RawBoosterWallet;
-}
+type RawUsagesResponse = KimiUsagesResponseParsed;
+type RawUsageDetail = NonNullable<RawUsagesResponse['usage']>;
+type RawUsageWindow = NonNullable<NonNullable<NonNullable<RawUsagesResponse['limits']>[number]['window']>>;
+type RawLimitEntry = NonNullable<NonNullable<RawUsagesResponse['limits']>[number]>;
+type RawBoosterWallet = NonNullable<RawUsagesResponse['boosterWallet']>;
+type RawBoosterBalance = NonNullable<RawBoosterWallet['balance']>;
 
 interface StoredCredentials {
   access_token?: string;
@@ -110,13 +94,14 @@ export class KimiProvider implements QuotaProviderAdapter {
     }
 
     try {
-      const result = await fetchJson<RawUsagesResponse>('kimi', `${this.baseUrl}/usages`, {
+      const result = await fetchJson<unknown>('kimi', `${this.baseUrl}/usages`, {
         headers: {
           Authorization: `Bearer ${this.accessToken}`,
           Accept: 'application/json',
         },
       });
-      return this.toSnapshot(result.value, fetchedAt, previous);
+      const parsed = parseWithSchema('kimi', kimiUsagesResponseSchema, result.value);
+      return this.toSnapshot(parsed, fetchedAt, previous);
     } catch (err) {
       return this.toErrorSnapshot(err, fetchedAt, previous);
     }
