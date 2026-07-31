@@ -301,6 +301,23 @@ describe('KimiProvider token refresh', () => {
     expect(mock.mock.calls.some((c) => String(c[0]).includes('auth.kimi.com'))).toBe(true);
   });
 
+  it('refreshes when only a refresh_token is stored (no access_token)', async () => {
+    // Covers the `!access_token && !refresh_token` short-circuit partial: here
+    // access_token is absent but refresh_token is present, so the guard at 132
+    // does NOT return (first operand true, second false).
+    await writeFile(credsPath, JSON.stringify({ refresh_token: 'rt-only' }));
+    const mock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mock.mockImplementation(async (url: string) => {
+      if (String(url).includes('auth.kimi.com')) {
+        return jsonResponse(200, { access_token: 'from-refresh', expires_in: 900 });
+      }
+      return jsonResponse(200, { usage: { used: '7', limit: '10' } });
+    });
+    const snap = await new KimiProvider({ credentialsPath: credsPath }).fetch(null);
+    expect(snap.status).toBe('ready');
+    expect(snap.buckets[0].used).toBe(7);
+  });
+
   it('returns unconfigured when the refresh endpoint itself errors (HTTP 500)', async () => {
     await writeFile(
       credsPath,
