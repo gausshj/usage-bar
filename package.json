@@ -10,7 +10,8 @@
     "lint": "eslint \"src/**/*.ts\" \"src/**/*.tsx\" \"tests/**/*.ts\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "smoke": "SMOKE=1 vitest run tests/smoke"
   },
   "dependencies": {
     "next": "^15.3.1",
