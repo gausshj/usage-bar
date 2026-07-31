@@ -18,6 +18,9 @@ export default [
       'src/security/**/*.ts',
       'src/connectors/**/*.ts',
       'src/workers/**/*.ts',
+      'src/quota/**/*.ts',
+      'src/app/**/*.ts',
+      'src/app/**/*.tsx',
       'tests/**/*.ts',
     ],
     languageOptions: {

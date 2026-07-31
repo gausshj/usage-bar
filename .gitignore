@@ -52,8 +52,12 @@ pnpm-debug.log*
 # Claude Code settings (local permission config)
 .claude/
 
+# ZCode workspace (local session/planning state)
+.zcode/
+
 # Internal planning docs
 docs/PROJECT_PLAN.md
+docs/PRD.md
 
 # Playwright
 test-results/
