@@ -19,6 +19,9 @@ tsconfig.tsbuildinfo
 *.key
 credentials/
 credential*
+# …but never ignore TypeScript source files — `credentials.ts` is legit code.
+!src/**/*.ts
+!tests/**/*.ts
 
 # Database (local only)
 *.db

@@ -175,27 +175,53 @@ export class QuotaService {
 // Default adapter wiring (reads env / local state)
 // ---------------------------------------------------------------------------
 
-async function buildDefaultAdapters(): Promise<Record<ProviderId, QuotaProviderAdapter>> {
+export async function buildDefaultAdapters(): Promise<Record<ProviderId, QuotaProviderAdapter>> {
   // Dynamic imports keep this ESM-safe and avoid loading provider code (App
   // Server, fs reads) in environments that inject mock adapters instead.
-  const [{ CodexProvider }, { GlmProvider }, { KimiProvider }] = await Promise.all([
+  const [{ CodexProvider }, { GlmProvider }, { KimiProvider }, credentialsMod] = await Promise.all([
     import('./providers/codex.js'),
     import('./providers/glm.js'),
     import('./providers/kimi.js'),
+    import('./credentials.js'),
   ]);
+
+  // Resolve a credential store only if a credentialId is configured. The
+  // security module is loaded lazily so it doesn't affect the no-credentialId
+  // (env-only) path.
+  const glmCredId = process.env.GLM_CREDENTIAL_ID;
+  const kimiCredId = process.env.KIMI_CREDENTIAL_ID;
+  let resolver;
+  if (glmCredId || kimiCredId) {
+    resolver = await buildSecureResolver(credentialsMod);
+  }
 
   return {
     codex_chatgpt: new CodexProvider(),
     glm_coding_plan: new GlmProvider({
       token: process.env.GLM_CODING_PLAN_TOKEN || process.env.GLM_QUOTA_TOKEN || '',
+      credentialId: glmCredId,
+      resolver,
       region: process.env.GLM_CODING_PLAN_REGION === 'zai' ? 'zai' : 'bigmodel',
       baseUrl: process.env.GLM_CODING_PLAN_BASE_URL,
     }),
     kimi_code: new KimiProvider({
       accessToken: process.env.KIMI_CODE_ACCESS_TOKEN || undefined,
+      credentialId: kimiCredId,
+      resolver,
       baseUrl: process.env.KIMI_CODE_BASE_URL,
     }),
   };
+}
+
+/** Build the security-module-backed CredentialResolver (lazy-loaded). */
+async function buildSecureResolver(
+  credentialsMod: typeof import('./credentials.js'),
+) {
+  const { SecureSecretService, InMemorySecureStorageRepository } = await import('../security/storage.js');
+  const { LocalFallbackKeyProvider } = await import('../security/key-manager.js');
+  const repository = new InMemorySecureStorageRepository();
+  const service = new SecureSecretService(repository, new LocalFallbackKeyProvider());
+  return new credentialsMod.SecureCredentialResolver(repository, service);
 }
 
 function displayName(id: ProviderId): string {

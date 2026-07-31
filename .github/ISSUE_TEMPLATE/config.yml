@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 产品需求文档（PRD）
+    url: https://github.com/gausshj/usage-bar/blob/main/docs/PRD.md
+    about: 提 issue 前请先确认与 PRD 的范围和验收标准一致

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { QuotaService } from '../../src/quota/service.js';
 import type {
@@ -193,5 +193,41 @@ describe('QuotaService', () => {
     await svc.readAll();
     await svc.readAll();
     expect(codex.fetchCalls).toBe(1); // stale WAS cached
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildDefaultAdapters (#22) — env / credentialId wiring
+// ---------------------------------------------------------------------------
+
+describe('buildDefaultAdapters', () => {
+  const ORIGINAL_ENV = { ...process.env };
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it('builds all three providers with env-token fallback (no credentialId)', async () => {
+    const { buildDefaultAdapters } = await import('../../src/quota/service.js');
+    delete process.env.GLM_CREDENTIAL_ID;
+    delete process.env.KIMI_CREDENTIAL_ID;
+    const adapters = await buildDefaultAdapters();
+    expect(adapters.codex_chatgpt.providerId).toBe('codex_chatgpt');
+    expect(adapters.glm_coding_plan.providerId).toBe('glm_coding_plan');
+    expect(adapters.kimi_code.providerId).toBe('kimi_code');
+  });
+
+  it('wires the credential resolver when GLM_CREDENTIAL_ID is set', async () => {
+    const { buildDefaultAdapters } = await import('../../src/quota/service.js');
+    process.env.GLM_CREDENTIAL_ID = 'glm-cred-123';
+    const adapters = await buildDefaultAdapters();
+    // The GLM provider should be configured (credentialId present).
+    expect(adapters.glm_coding_plan.isConfigured()).toBe(true);
+  });
+
+  it('wires the credential resolver when KIMI_CREDENTIAL_ID is set', async () => {
+    const { buildDefaultAdapters } = await import('../../src/quota/service.js');
+    process.env.KIMI_CREDENTIAL_ID = 'kimi-cred-9';
+    const adapters = await buildDefaultAdapters();
+    expect(adapters.kimi_code.isConfigured()).toBe(true);
   });
 });

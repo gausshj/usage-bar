@@ -21,6 +21,7 @@ import {
   kimiUsagesResponseSchema,
   type KimiUsagesResponseParsed,
 } from '../schemas.js';
+import type { CredentialResolver, ExpectedScope } from '../credentials.js';
 import type {
   QuotaBucket,
   QuotaBalance,
@@ -29,13 +30,19 @@ import type {
 } from '../contract.js';
 
 export interface KimiProviderConfig {
-  /** Access token override; otherwise read from kimi-cli credentials. */
+  /** Access token override; otherwise read from kimi-cli credentials. env fallback. */
   accessToken?: string;
+  /** A credentialId resolved via `resolver` with scope validation (#22). */
+  credentialId?: string;
+  /** Resolver used to decrypt `credentialId`. */
+  resolver?: CredentialResolver;
   /** Override credentials file path. */
   credentialsPath?: string;
   /** Override base URL. */
   baseUrl?: string;
 }
+
+const EXPECTED_SCOPE: ExpectedScope = { provider: 'kimi_code', kind: 'oauth_token' };
 
 const PROVIDER_ID = 'kimi_code' as const;
 const DISPLAY_NAME = 'Kimi Code';
@@ -66,17 +73,21 @@ export class KimiProvider implements QuotaProviderAdapter {
   readonly displayName = DISPLAY_NAME;
 
   private readonly accessTokenOverride: string | undefined;
+  private readonly credentialId: string | undefined;
+  private readonly resolver: CredentialResolver | undefined;
   private readonly credentialsPath: string;
   private readonly baseUrl: string;
 
   constructor(config: KimiProviderConfig = {}) {
     this.accessTokenOverride = config.accessToken;
+    this.credentialId = config.credentialId;
+    this.resolver = config.resolver;
     this.credentialsPath = config.credentialsPath ?? DEFAULT_CREDENTIALS_PATH;
     this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
   }
 
   isConfigured(): boolean {
-    if (this.accessTokenOverride) return true;
+    if (this.accessTokenOverride || this.credentialId) return true;
     const creds = readCredentials(this.credentialsPath);
     return !!(creds.access_token || creds.refresh_token);
   }
@@ -126,6 +137,11 @@ export class KimiProvider implements QuotaProviderAdapter {
    * Throws if no usable token can be obtained.
    */
   private async resolveAccessToken(): Promise<string> {
+    // credentialId takes precedence: resolve + scope-validate via the resolver.
+    if (this.credentialId) {
+      if (!this.resolver) throw new Error('credentialId set but no resolver provided');
+      return this.resolver.reveal(this.credentialId, EXPECTED_SCOPE);
+    }
     if (this.accessTokenOverride) return this.accessTokenOverride;
 
     const creds = readCredentials(this.credentialsPath);
