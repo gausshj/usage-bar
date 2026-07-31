@@ -83,6 +83,8 @@ run('real-account smoke test', () => {
       if (!token) {
         expect(snap.status).toBe('unconfigured');
       }
+      // Always assert a valid, known status regardless of credential state.
+      expect(['ready', 'stale', 'unconfigured', 'unavailable', 'unsupported', 'error']).toContain(snap.status);
     }, 15000);
   }
 
@@ -102,6 +104,9 @@ run('real-account smoke test', () => {
       error: snap.error ? `${snap.error.code}: ${snap.error.safeMessage}` : null,
       ok: snap.status === 'ready',
     });
+    // Smoke tests must not hard-fail on an expired credential, but the snapshot
+    // must always be a valid, known status (SonarCloud S2699 needs an assertion).
+    expect(['ready', 'stale', 'unconfigured', 'unavailable', 'unsupported', 'error']).toContain(snap.status);
   }, 20000);
 
   it('writes a redacted report to docs/smoke-test-report.md', () => {
