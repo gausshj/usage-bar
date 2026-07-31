@@ -62,6 +62,9 @@ pnpm-debug.log*
 docs/PROJECT_PLAN.md
 docs/PRD.md
 
+# Smoke test reports (local, redacted but not for public repo)
+docs/smoke-test-report.md
+
 # Playwright
 test-results/
 playwright-report/
