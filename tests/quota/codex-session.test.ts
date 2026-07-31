@@ -99,6 +99,10 @@ describe('CodexSessionQuotaSource', () => {
     expect(snapshot.error).toBeUndefined();
     expect(snapshot.buckets).toHaveLength(2);
 
+    // observedAt reflects the latest event's time, not the read time (issue #10).
+    expect(snapshot.observedAt).toBe(Date.parse('2026-07-30T10:05:00Z'));
+    expect(snapshot.observedAt).not.toBe(FIXED_NOW.getTime());
+
     const fiveHour = snapshot.buckets[0];
     expect(fiveHour.label).toBe('5-hour');
     expect(fiveHour.usedPercent).toBe(15);
