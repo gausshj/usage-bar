@@ -150,6 +150,30 @@ describe('KimiProvider', () => {
     expect(snap.error?.code).toBe('transient');
     expect(snap.error?.retryable).toBe(true);
   });
+
+  it('labels a non-hourly minute window verbatim (e.g. 90-minute)', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, {
+        limits: [{ window: { duration: 90, timeUnit: 'TIME_UNIT_MINUTE' }, detail: { used: '1', limit: '10' } }],
+      }),
+    );
+    const snap = await new KimiProvider({ accessToken: 't' }).fetch(null);
+    expect(snap.buckets[0].label).toBe('90-minute');
+  });
+
+  it('labels DAY and WEEK windows', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, {
+        limits: [
+          { window: { duration: 3, timeUnit: 'TIME_UNIT_DAY' }, detail: { used: '1', limit: '10' } },
+          { window: { duration: 2, timeUnit: 'TIME_UNIT_WEEK' }, detail: { used: '1', limit: '10' } },
+        ],
+      }),
+    );
+    const snap = await new KimiProvider({ accessToken: 't' }).fetch(null);
+    expect(snap.buckets[0].label).toBe('3-day');
+    expect(snap.buckets[1].label).toBe('2-week');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -169,6 +193,13 @@ describe('KimiProvider token refresh', () => {
   afterEach(async () => {
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
+    // Restore perms before removing (a test may have chmod'd a subdir read-only).
+    try {
+      const { chmod } = await import('node:fs/promises');
+      await chmod(join(dir, 'creds'), 0o700).catch(() => {});
+    } catch {
+      // ignore
+    }
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -250,6 +281,26 @@ describe('KimiProvider token refresh', () => {
     expect(mock.mock.calls.every((c) => !String(c[0]).includes('auth.kimi.com'))).toBe(true);
   });
 
+  it('treats a token with no expires_at as expired (forces refresh)', async () => {
+    // No expires_at field → isExpired returns true → refresh is attempted.
+    await writeFile(
+      credsPath,
+      JSON.stringify({ access_token: 'maybe-stale', refresh_token: 'rt' }),
+    );
+    const mock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mock.mockImplementation(async (url: string) => {
+      if (String(url).includes('auth.kimi.com')) {
+        return jsonResponse(200, { access_token: 'refreshed', expires_in: 900 });
+      }
+      return jsonResponse(200, { usage: { used: '3', limit: '10' } });
+    });
+
+    const snap = await new KimiProvider({ credentialsPath: credsPath }).fetch(null);
+    expect(snap.status).toBe('ready');
+    // A refresh call happened (proving isExpired returned true for missing expires_at).
+    expect(mock.mock.calls.some((c) => String(c[0]).includes('auth.kimi.com'))).toBe(true);
+  });
+
   it('returns unconfigured when the refresh endpoint itself errors (HTTP 500)', async () => {
     await writeFile(
       credsPath,
@@ -259,10 +310,14 @@ describe('KimiProvider token refresh', () => {
         expires_at: Math.floor(Date.now() / 1000) - 3600,
       }),
     );
-    // refreshOAuthToken fetch returns 500 → throws → resolveAccessToken throws.
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      jsonResponse(500, { error: 'server' }),
-    );
+    // refreshOAuthToken fetch returns 500 → res.ok is false → throws.
+    const mock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mock.mockImplementation(async (url: string) => {
+      if (String(url).includes('auth.kimi.com')) {
+        return jsonResponse(500, { error: 'server' });
+      }
+      return jsonResponse(200, { usage: { used: '1', limit: '10' } });
+    });
 
     const snap = await new KimiProvider({ credentialsPath: credsPath }).fetch(null);
     expect(snap.status).toBe('unconfigured');
@@ -270,16 +325,22 @@ describe('KimiProvider token refresh', () => {
   });
 
   it('still fetches successfully when writing refreshed creds fails (non-fatal)', async () => {
+    const { mkdir, chmod } = await import('node:fs/promises');
+    // creds live in a subdir; after writing creds we make the subdir read-only
+    // so the write-back fails, while the already-open read still succeeded.
+    const subDir = join(dir, 'creds');
+    await mkdir(subDir);
+    const roPath = join(subDir, 'kimi-code.json');
     await writeFile(
-      credsPath,
+      roPath,
       JSON.stringify({
         access_token: 'old',
         refresh_token: 'rt',
         expires_at: Math.floor(Date.now() / 1000) - 3600,
       }),
     );
-    // Point credentialsPath at a path whose directory vanishes after read,
-    // so the write-back fails — but the in-memory refreshed token still works.
+    await chmod(subDir, 0o500); // r-x: read ok, write denied
+
     const mock = globalThis.fetch as ReturnType<typeof vi.fn>;
     mock.mockImplementation(async (url: string) => {
       if (String(url).includes('auth.kimi.com')) {
@@ -288,10 +349,9 @@ describe('KimiProvider token refresh', () => {
       return jsonResponse(200, { usage: { used: '2', limit: '10' } });
     });
 
-    // Use a credentials path under a read-only-ish location to force write failure.
-    const badPath = '/dev/null/not-writable/kimi-code.json';
-    const snap = await new KimiProvider({ credentialsPath: badPath }).fetch(null);
-    // No creds readable at badPath → treated as no credentials.
-    expect(snap.status).toBe('unconfigured');
+    const snap = await new KimiProvider({ credentialsPath: roPath }).fetch(null);
+    // writeCredentials failed silently, but the in-memory refreshed token worked.
+    expect(snap.status).toBe('ready');
+    expect(snap.buckets[0].used).toBe(2);
   });
 });
