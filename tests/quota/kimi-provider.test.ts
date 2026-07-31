@@ -119,4 +119,32 @@ describe('KimiProvider', () => {
     const snap = await new KimiProvider({ accessToken: 't' }).fetch(null);
     expect(snap.status).toBe('ready');
   });
+
+  it('maps a 403 to error status with forbidden code', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(403, {}),
+    );
+    const snap = await new KimiProvider({ accessToken: 't' }).fetch(null);
+    expect(snap.status).toBe('error');
+    expect(snap.error?.code).toBe('forbidden');
+  });
+
+  it('maps a 404 to unsupported status', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(404, {}),
+    );
+    const snap = await new KimiProvider({ accessToken: 't' }).fetch(null);
+    expect(snap.status).toBe('unsupported');
+    expect(snap.error?.code).toBe('endpoint_not_found');
+  });
+
+  it('maps a 429 to unavailable (transient, retryable)', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(429, {}),
+    );
+    const snap = await new KimiProvider({ accessToken: 't' }).fetch(null);
+    expect(snap.status).toBe('unavailable');
+    expect(snap.error?.code).toBe('transient');
+    expect(snap.error?.retryable).toBe(true);
+  });
 });
