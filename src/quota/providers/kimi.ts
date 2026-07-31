@@ -131,20 +131,27 @@ export class KimiProvider implements QuotaProviderAdapter {
     const creds = readCredentials(this.credentialsPath);
     if (!creds.access_token && !creds.refresh_token) return '';
 
-    // Re-read each call so we pick up tokens refreshed by kimi-cli between calls.
+    // Use the stored token if it is still valid.
     if (creds.access_token && !isExpired(creds)) {
       return creds.access_token;
     }
 
-    // Token missing or expired → refresh with the refresh_token.
-    // The `?? ''` right side is unreachable here (an empty access_token with
-    // no refresh_token is caught by the guard above), kept for type safety.
-    if (!creds.refresh_token) return creds.access_token ?? /* istanbul ignore next */ '';
+    // Token expired or missing. If there's no refresh_token, fall back to the
+    // (stale) access_token — the usages request will likely 401, which maps to
+    // a safe error. The guard at line 132 guarantees access_token is set here.
+    if (!creds.refresh_token) {
+      return creds.access_token as string;
+    }
 
+    // Refresh via OAuth, then persist so kimi-cli stays in sync.
     const refreshed = await refreshOAuthToken(creds.refresh_token);
-    // Write back so the CLI and subsequent calls see the fresh token.
     writeCredentials(this.credentialsPath, { ...creds, ...refreshed });
-    return refreshed.access_token ?? /* istanbul ignore next */ '';
+    // A successful refresh must yield an access_token; treat its absence as
+    // an auth failure (thrown → caller maps to token_expired).
+    if (!refreshed.access_token) {
+      throw new Error('kimi oauth refresh returned no access_token');
+    }
+    return refreshed.access_token;
   }
 
   // -----------------------------------------------------------------
