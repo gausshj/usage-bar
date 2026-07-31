@@ -12,7 +12,7 @@
 // enum strings; this adapter normalizes them to the contract's numeric fields.
 // ============================================================================
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 import { fetchJson } from '../http.js';
@@ -52,29 +52,51 @@ type RawUsageWindow = NonNullable<NonNullable<NonNullable<RawUsagesResponse['lim
 
 interface StoredCredentials {
   access_token?: string;
-  expires_at?: number;
+  refresh_token?: string;
+  expires_at?: number; // seconds (Kimi stores epoch-seconds)
+  expires_in?: number; // seconds (lifetime, e.g. 900)
 }
+
+/** OAuth refresh endpoint + client id (from kimi-cli source). */
+const OAUTH_HOST = 'https://auth.kimi.com';
+const OAUTH_CLIENT_ID = '17e5f671-d194-4dfb-9706-5516cb48c098';
 
 export class KimiProvider implements QuotaProviderAdapter {
   readonly providerId = PROVIDER_ID;
   readonly displayName = DISPLAY_NAME;
 
-  private readonly accessToken: string;
+  private readonly accessTokenOverride: string | undefined;
+  private readonly credentialsPath: string;
   private readonly baseUrl: string;
 
   constructor(config: KimiProviderConfig = {}) {
-    this.accessToken = config.accessToken ?? readKimiAccessToken(config.credentialsPath);
+    this.accessTokenOverride = config.accessToken;
+    this.credentialsPath = config.credentialsPath ?? DEFAULT_CREDENTIALS_PATH;
     this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
   }
 
   isConfigured(): boolean {
-    return !!this.accessToken;
+    if (this.accessTokenOverride) return true;
+    const creds = readCredentials(this.credentialsPath);
+    return !!(creds.access_token || creds.refresh_token);
   }
 
   async fetch(previous: QuotaSnapshot | null): Promise<QuotaSnapshot> {
     const fetchedAt = new Date().toISOString();
 
-    if (!this.accessToken) {
+    // Resolve a valid access token, refreshing via OAuth if necessary (#15).
+    let token: string;
+    try {
+      token = await this.resolveAccessToken();
+    } catch {
+      return empty(fetchedAt, previous, {
+        code: 'token_expired',
+        safeMessage: 'Kimi Code token expired or revoked. Re-login via kimi-cli.',
+        retryable: false,
+      }, 'unconfigured');
+    }
+
+    if (!token) {
       return empty(fetchedAt, previous, {
         code: 'no_credentials',
         safeMessage: 'Kimi Code not logged in. Run kimi-cli login.',
@@ -82,18 +104,10 @@ export class KimiProvider implements QuotaProviderAdapter {
       }, 'unconfigured');
     }
 
-    if (isTokenExpired()) {
-      return empty(fetchedAt, previous, {
-        code: 'token_expired',
-        safeMessage: 'Kimi Code token expired. Re-login via kimi-cli.',
-        retryable: false,
-      }, 'unconfigured');
-    }
-
     try {
       const result = await fetchJson<unknown>('kimi', `${this.baseUrl}/usages`, {
         headers: {
-          Authorization: `Bearer ${this.accessToken}`,
+          Authorization: `Bearer ${token}`,
           Accept: 'application/json',
         },
       });
@@ -102,6 +116,42 @@ export class KimiProvider implements QuotaProviderAdapter {
     } catch (err) {
       return this.toErrorSnapshot(err, fetchedAt, previous);
     }
+  }
+
+  /**
+   * Resolve a valid access token. If an override is configured, use it as-is.
+   * Otherwise read the credentials file; if the stored token is expired (or
+   * near expiry), refresh it via the OAuth refresh_token grant and write the
+   * refreshed credentials back so kimi-cli and this app stay in sync (#15).
+   * Throws if no usable token can be obtained.
+   */
+  private async resolveAccessToken(): Promise<string> {
+    if (this.accessTokenOverride) return this.accessTokenOverride;
+
+    const creds = readCredentials(this.credentialsPath);
+    if (!creds.access_token && !creds.refresh_token) return '';
+
+    // Use the stored token if it is still valid.
+    if (creds.access_token && !isExpired(creds)) {
+      return creds.access_token;
+    }
+
+    // Token expired or missing. If there's no refresh_token, fall back to the
+    // (stale) access_token — the usages request will likely 401, which maps to
+    // a safe error. The guard at line 132 guarantees access_token is set here.
+    if (!creds.refresh_token) {
+      return creds.access_token as string;
+    }
+
+    // Refresh via OAuth, then persist so kimi-cli stays in sync.
+    const refreshed = await refreshOAuthToken(creds.refresh_token);
+    writeCredentials(this.credentialsPath, { ...creds, ...refreshed });
+    // A successful refresh must yield an access_token; treat its absence as
+    // an auth failure (thrown → caller maps to token_expired).
+    if (!refreshed.access_token) {
+      throw new Error('kimi oauth refresh returned no access_token');
+    }
+    return refreshed.access_token;
   }
 
   // -----------------------------------------------------------------
@@ -237,20 +287,63 @@ function toNumber(value: string | number | undefined): number | null {
 // Credentials + expiry
 // ---------------------------------------------------------------------------
 
-function readKimiAccessToken(credentialsPath?: string): string {
-  const path = credentialsPath ?? DEFAULT_CREDENTIALS_PATH;
+/** Read the stored credentials file (best-effort). */
+function readCredentials(path: string): StoredCredentials {
   try {
-    const creds = JSON.parse(readFileSync(path, 'utf8')) as StoredCredentials;
-    return creds.access_token ?? '';
+    return JSON.parse(readFileSync(path, 'utf8')) as StoredCredentials;
   } catch {
-    return '';
+    return {};
   }
 }
 
-function isTokenExpired(): boolean {
-  // We can't access the stored expiry without re-reading; the 401 path handles
-  // actual expiry. For a pre-check, rely on the server's 401. Return false here.
-  return false;
+/**
+ * Is the stored token expired? Kimi stores expires_at as epoch-SECONDS, and
+ * tokens last ~15min (expires_in=900). We treat it as expired if less than
+ * 60s of life remains, to avoid a race right at the boundary.
+ */
+function isExpired(creds: StoredCredentials): boolean {
+  const expiresAtSec = creds.expires_at;
+  if (typeof expiresAtSec !== 'number') {
+    // No expiry recorded → assume expired (forces a refresh attempt, which
+    // fails safely into the 401 path if the token is actually still valid).
+    return true;
+  }
+  // expires_at is seconds; compare against now-in-seconds + 60s buffer.
+  const nowSec = Math.floor(Date.now() / 1000);
+  return expiresAtSec <= nowSec + 60;
+}
+
+/** Refresh the access token via the OAuth refresh_token grant. */
+async function refreshOAuthToken(refreshToken: string): Promise<StoredCredentials> {
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+    client_id: OAUTH_CLIENT_ID,
+  });
+  const res = await fetch(`${OAUTH_HOST}/api/oauth/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+  if (!res.ok) {
+    throw new Error(`kimi oauth refresh failed: HTTP ${res.status}`);
+  }
+  const data = (await res.json()) as StoredCredentials;
+  // Compute expires_at (seconds) from expires_in so isExpired works next time.
+  if (data.expires_in != null && data.expires_at == null) {
+    data.expires_at = Math.floor(Date.now() / 1000) + data.expires_in;
+  }
+  return data;
+}
+
+/** Write refreshed credentials back, preserving file permissions (#15). */
+function writeCredentials(path: string, creds: StoredCredentials): void {
+  try {
+    writeFileSync(path, JSON.stringify(creds, null, 2));
+  } catch {
+    // Non-fatal: if we can't persist, the in-memory token still works for
+    // this request; next call will refresh again.
+  }
 }
 
 // ---------------------------------------------------------------------------
