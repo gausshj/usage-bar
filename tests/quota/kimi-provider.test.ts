@@ -69,7 +69,11 @@ describe('KimiProvider', () => {
   });
 
   it('returns unconfigured when no access token is available', async () => {
-    const snap = await new KimiProvider({ accessToken: '' }).fetch(null);
+    // Point at a non-existent credentials file so the real one isn't read.
+    const snap = await new KimiProvider({
+      accessToken: '',
+      credentialsPath: '/nonexistent/kimi-code.json',
+    }).fetch(null);
     expect(snap.status).toBe('unconfigured');
     expect(snap.error?.code).toBe('no_credentials');
     expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -89,7 +93,10 @@ describe('KimiProvider', () => {
 
   it('isConfigured reflects token presence', () => {
     expect(new KimiProvider({ accessToken: 't' }).isConfigured()).toBe(true);
-    expect(new KimiProvider({ accessToken: '' }).isConfigured()).toBe(false);
+    // No override + no readable credentials file → not configured.
+    expect(
+      new KimiProvider({ accessToken: '', credentialsPath: '/nonexistent/kimi-code.json' }).isConfigured(),
+    ).toBe(false);
   });
 
   it('returns a controlled error on malformed response shape (schema drift)', async () => {
