@@ -175,7 +175,7 @@ export class QuotaService {
 // Default adapter wiring (reads env / local state)
 // ---------------------------------------------------------------------------
 
-async function buildDefaultAdapters(): Promise<Record<ProviderId, QuotaProviderAdapter>> {
+export async function buildDefaultAdapters(): Promise<Record<ProviderId, QuotaProviderAdapter>> {
   // Dynamic imports keep this ESM-safe and avoid loading provider code (App
   // Server, fs reads) in environments that inject mock adapters instead.
   const [{ CodexProvider }, { GlmProvider }, { KimiProvider }, credentialsMod] = await Promise.all([

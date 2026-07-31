@@ -154,7 +154,17 @@ describe('GlmProvider', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
-  it('throws at construction if neither token nor credentialId is set', () => {
-    expect(() => new GlmProvider({})).toThrow(/requires either/);
+  it('maps missing resolver (credentialId set but no resolver) to unconfigured', async () => {
+    const p = new GlmProvider({ credentialId: 'cred-x' }); // no resolver
+    const snap = await p.fetch(null);
+    expect(snap.status).toBe('unconfigured');
+    expect(snap.error?.code).toBe('credential_unavailable');
+  });
+
+  it('is unconfigured (not a throw) when neither token nor credentialId is set', async () => {
+    const p = new GlmProvider({});
+    expect(p.isConfigured()).toBe(false);
+    const snap = await p.fetch(null);
+    expect(snap.status).toBe('unconfigured');
   });
 });

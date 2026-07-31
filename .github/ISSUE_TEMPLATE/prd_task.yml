@@ -1,0 +1,65 @@
+name: 📋 PRD 实施任务
+description: 从 PRD / 审计产生的实现任务（供维护者与 coding agent 使用）
+title: "[Task] "
+labels: ["task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        用于 PRD 实施、审计修复类任务。一个 issue 只装一个可独立验收的问题。
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 优先级
+      options:
+        - P0 — 正确性 / 安全问题
+        - P1 — 契约与核心功能
+        - P2 — 产品化收尾
+        - P3 — 发布门槛 / 工程效率
+    validations:
+      required: true
+
+  - type: input
+    id: prd-ref
+    attributes:
+      label: PRD 章节
+      description: 关联的 docs/PRD.md 章节，如 §7.1 / §14.2
+      placeholder: "§x.y"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题 / 背景
+      description: 现状与差距，注明文件路径和行号
+      placeholder: 文件：`src/quota/...`。目前 …，PRD 要求 …
+    validations:
+      required: true
+
+  - type: textarea
+    id: tasks
+    attributes:
+      label: 任务清单
+      description: 用复选框列出，完成一项勾一项
+      value: |
+        - [ ] 
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 如何验证完成（测试命令、预期行为）
+      placeholder: "`npm test` 通过；…"
+    validations:
+      required: true
+
+  - type: input
+    id: blocked-by
+    attributes:
+      label: 依赖
+      description: 被哪些 issue 阻塞（#N），无则留空
+      placeholder: "#9, #10"

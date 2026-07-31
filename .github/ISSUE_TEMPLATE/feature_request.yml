@@ -1,0 +1,40 @@
+name: ✨ 功能请求
+description: 提出新能力或改进建议
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先确认请求符合 `docs/PRD.md` 的范围——v1 是个人本地优先的三卡配额看板，不做团队计费、成本核算或云端同步（见 PRD §4.2 非目标）。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+      description: 你遇到的场景或痛点是什么？
+      placeholder: 当我在 … 时，我希望 …
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      description: 你期望的行为或交互
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方案
+      description: 可选
+
+  - type: checkboxes
+    id: scope-check
+    attributes:
+      label: 范围确认
+      options:
+        - label: 我确认该请求不属于 PRD §4.2 列出的非目标
+          required: true

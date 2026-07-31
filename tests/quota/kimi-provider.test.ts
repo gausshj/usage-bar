@@ -150,6 +150,13 @@ describe('KimiProvider', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
+  it('maps missing resolver (credentialId set but no resolver) to unconfigured', async () => {
+    const p = new KimiProvider({ credentialId: 'cred-x' }); // no resolver
+    const snap = await p.fetch(null);
+    expect(snap.status).toBe('unconfigured');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   it('isConfigured returns true when a credentialId is set', () => {
     expect(new KimiProvider({ credentialId: 'cred', resolver: { reveal: async () => 'x' } }).isConfigured()).toBe(true);
   });

@@ -61,9 +61,10 @@ export class GlmProvider implements QuotaProviderAdapter {
   private readonly baseUrl: string;
 
   constructor(config: GlmProviderConfig) {
-    if (!config.token && !config.credentialId) {
-      throw new Error('GLM requires either a token (env fallback) or a credentialId');
-    }
+    // Allow both token and credentialId to be absent — the adapter then reports
+    // unconfigured (via isConfigured()/fetch) instead of throwing at build time.
+    // This lets the aggregation service build all three providers even when one
+    // is simply not configured.
     this.tokenOverride = config.token;
     this.credentialId = config.credentialId;
     this.resolver = config.resolver;
