@@ -293,26 +293,17 @@ describe('CodexSessionQuotaSource.fetchUsage', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('aggregates cumulative token usage per day across sessions', async () => {
-    // Two sessions on the same day → their totals sum into one day bucket.
+  it('computes daily usage from incremental deltas, not raw cumulative totals', async () => {
+    // One session with two events: cumulative total grows 1000 → 3500.
+    // The day's consumption is the DELTA (2500), not the final total (3500).
     const sessionDir = join(dir, '2026', '07', '30');
     await mkdir(sessionDir, { recursive: true });
     await writeFile(
       join(sessionDir, 'rollout-a.jsonl'),
-      usageLine('2026-07-30T10:00:00Z', {
-        input_tokens: 1000,
-        output_tokens: 200,
-        total_tokens: 1200,
-        cached_input_tokens: 100,
-      }) + '\n',
-    );
-    await writeFile(
-      join(sessionDir, 'rollout-b.jsonl'),
-      usageLine('2026-07-30T11:00:00Z', {
-        input_tokens: 3000,
-        output_tokens: 500,
-        total_tokens: 3500,
-      }) + '\n',
+      [
+        usageLine('2026-07-30T10:00:00Z', { input_tokens: 1000, output_tokens: 200, total_tokens: 1200, cached_input_tokens: 100 }),
+        usageLine('2026-07-30T11:00:00Z', { input_tokens: 3000, output_tokens: 500, total_tokens: 3500, cached_input_tokens: 150 }),
+      ].join('\n') + '\n',
     );
 
     const source = new CodexSessionQuotaSource({ sessionsDir: dir, now: () => FIXED_NOW });
@@ -321,29 +312,55 @@ describe('CodexSessionQuotaSource.fetchUsage', () => {
     expect(records).toHaveLength(1);
     const day = records[0];
     expect(day.date).toBe('2026-07-30');
-    expect(day.requests).toBe(2); // two sessions
-    expect(day.input_tokens).toBe(4000);
-    expect(day.output_tokens).toBe(700);
-    expect(day.total_tokens).toBe(4700);
-    expect(day.cached_input_tokens).toBe(100);
+    expect(day.requests).toBe(1); // one delta (between the two events)
+    // Deltas: input 3000-1000=2000, output 500-200=300, total 3500-1200=2300, cached 150-100=50
+    expect(day.input_tokens).toBe(2000);
+    expect(day.output_tokens).toBe(300);
+    expect(day.total_tokens).toBe(2300);
+    expect(day.cached_input_tokens).toBe(50);
   });
 
-  it('adds reasoning_output_tokens into output_tokens', async () => {
+  it('does NOT add reasoning_output_tokens into output (already included)', async () => {
+    // output_tokens already contains reasoning; the delta must not add it again.
     const sessionDir = join(dir, '2026', '07', '30');
     await mkdir(sessionDir, { recursive: true });
     await writeFile(
       join(sessionDir, 'rollout-reason.jsonl'),
-      usageLine('2026-07-30T10:00:00Z', {
-        output_tokens: 100,
-        reasoning_output_tokens: 50,
-        total_tokens: 150,
-      }) + '\n',
+      [
+        usageLine('2026-07-30T10:00:00Z', { output_tokens: 100, reasoning_output_tokens: 40, total_tokens: 100 }),
+        usageLine('2026-07-30T11:00:00Z', { output_tokens: 300, reasoning_output_tokens: 120, total_tokens: 300 }),
+      ].join('\n') + '\n',
     );
 
     const source = new CodexSessionQuotaSource({ sessionsDir: dir, now: () => FIXED_NOW });
     const records = await source.fetchUsage(7);
 
-    expect(records[0].output_tokens).toBe(150); // 100 + 50
+    // output delta = 300-100 = 200 (NOT 200 + reasoning delta 80)
+    expect(records[0].output_tokens).toBe(200);
+  });
+
+  it('splits a cross-day session into the correct days via deltas', async () => {
+    // A session active across two days: day1 event total=1000, day2 event total=3000.
+    // day1 gets nothing (no predecessor before it in the tail), day2 gets delta 2000.
+    const sessionDir = join(dir, '2026', '07', '29');
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      join(sessionDir, 'rollout-cross.jsonl'),
+      [
+        usageLine('2026-07-29T22:00:00Z', { total_tokens: 1000, input_tokens: 800, output_tokens: 200 }),
+        usageLine('2026-07-30T02:00:00Z', { total_tokens: 3000, input_tokens: 2600, output_tokens: 400 }),
+      ].join('\n') + '\n',
+    );
+
+    const source = new CodexSessionQuotaSource({ sessionsDir: dir, now: () => FIXED_NOW });
+    const records = await source.fetchUsage(7);
+
+    // Only day2 (the delta target) appears; day1's baseline is not counted.
+    const dates = records.map((r) => r.date);
+    expect(dates).toContain('2026-07-30');
+    expect(dates).not.toContain('2026-07-29');
+    const day2 = records.find((r) => r.date === '2026-07-30')!;
+    expect(day2.total_tokens).toBe(2000);
   });
 
   it('skips files whose mtime is older than the window', async () => {
@@ -354,15 +371,20 @@ describe('CodexSessionQuotaSource.fetchUsage', () => {
 
     await writeFile(
       join(recentDir, 'rollout-recent.jsonl'),
-      usageLine('2026-07-30T10:00:00Z', { input_tokens: 100, total_tokens: 100 }) + '\n',
+      [
+        usageLine('2026-07-30T09:00:00Z', { total_tokens: 50 }),
+        usageLine('2026-07-30T10:00:00Z', { total_tokens: 100, input_tokens: 50 }),
+      ].join('\n') + '\n',
     );
     const oldFile = join(oldDir, 'rollout-old.jsonl');
     await writeFile(
       oldFile,
-      usageLine('2026-06-01T10:00:00Z', { input_tokens: 999, total_tokens: 999 }) + '\n',
+      [
+        usageLine('2026-06-01T09:00:00Z', { total_tokens: 500 }),
+        usageLine('2026-06-01T10:00:00Z', { total_tokens: 999, input_tokens: 499 }),
+      ].join('\n') + '\n',
     );
 
-    // Force the old file's mtime to 30 days ago so it falls outside the 7d window.
     const thirtyDaysAgo = new Date('2026-06-30T12:00:00Z');
     await utimes(oldFile, thirtyDaysAgo, thirtyDaysAgo);
 
@@ -379,8 +401,15 @@ describe('CodexSessionQuotaSource.fetchUsage', () => {
     await mkdir(day1, { recursive: true });
     await mkdir(day2, { recursive: true });
 
-    await writeFile(join(day2, 'rollout-a.jsonl'), usageLine('2026-07-30T10:00:00Z', { total_tokens: 1 }) + '\n');
-    await writeFile(join(day1, 'rollout-b.jsonl'), usageLine('2026-07-28T10:00:00Z', { total_tokens: 2 }) + '\n');
+    // Each file has two events so a delta is produced.
+    await writeFile(
+      join(day1, 'rollout-b.jsonl'),
+      [usageLine('2026-07-28T09:00:00Z', { total_tokens: 0 }), usageLine('2026-07-28T10:00:00Z', { total_tokens: 2, input_tokens: 2 })].join('\n') + '\n',
+    );
+    await writeFile(
+      join(day2, 'rollout-a.jsonl'),
+      [usageLine('2026-07-30T09:00:00Z', { total_tokens: 0 }), usageLine('2026-07-30T10:00:00Z', { total_tokens: 1, input_tokens: 1 })].join('\n') + '\n',
+    );
 
     const source = new CodexSessionQuotaSource({ sessionsDir: dir, now: () => FIXED_NOW });
     const records = await source.fetchUsage(7);
@@ -401,5 +430,19 @@ describe('CodexSessionQuotaSource.fetchUsage', () => {
     const records = await source.fetchUsage(7);
 
     expect(records).toHaveLength(0);
+  });
+
+  it('buckets by local timezone, not UTC', async () => {
+    // localDateKey uses the system's local timezone via Intl en-CA.
+    // An event at 2026-07-30T23:30 UTC: in UTC+N zones it falls on 07-31 local,
+    // in UTC-N zones it stays 07-30. Either way it must NOT be a raw UTC slice
+    // when the local zone differs from UTC — we assert it equals what the local
+    // Date says the Y/M/D is, proving it's local-zoned (not toISOString).
+    const { _localDateKeyForTest } = await import('../../src/quota/codex-session.js');
+    const ts = Date.parse('2026-07-30T23:30:00Z');
+    const expected = new Date(ts).toLocaleString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' });
+    expect(_localDateKeyForTest(ts)).toBe(expected);
+    // And it's a valid YYYY-MM-DD shape.
+    expect(_localDateKeyForTest(ts)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });

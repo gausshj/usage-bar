@@ -205,47 +205,60 @@ export class CodexSessionQuotaSource implements QuotaSource {
   /**
    * Aggregate daily token usage across recent Codex sessions.
    *
-   * For each session file we read the most recent token_count event and take
-   * its `total_token_usage` (the cumulative count for that session). We then
-   * bucket these by the event's date. `requests` counts how many token_count
-   * events fired that day (a proxy for API turns). Only the last `days` days
-   * are scanned to bound work, since the session tree grows large over time.
+   * Computes consumption as the DELTA between consecutive token_count events'
+   * cumulative totals (not the raw cumulative value), so a session spanning
+   * multiple days attributes each day's increment to that day rather than
+   * dumping everything onto the last day (PRD §7.1 / §14.2). Buckets use the
+   * user's LOCAL timezone, not UTC. output_tokens already includes reasoning
+   * tokens, so reasoning is NOT added again.
    *
+   * Only the last `days` days are scanned (file mtime pre-filter + tail read).
    * Returns records sorted oldest-first.
    */
   async fetchUsage(days = 7): Promise<CodexUsageRecord[]> {
     const cutoffMs = this.now().getTime() - days * 86_400_000;
 
-    // Pre-filter by file mtime so we never open the (potentially huge) older
-    // files. A session active in the last `days` days has a recent mtime.
     const candidates = await collectRolloutFilesWithMtime(this.sessionsDir);
     const recent = candidates.filter(([, mtimeMs]) => mtimeMs >= cutoffMs);
 
-    // date(YYYY-MM-DD) → aggregated accumulator
+    // local-date(YYYY-MM-DD) → accumulator
     const byDay = new Map<
       string,
       { requests: number; input: number; output: number; total: number; cached: number }
     >();
 
-    // Process sequentially: each readTail allocates a 512KB buffer, and the
-    // session tree can contain dozens of files. Sequential keeps the peak
-    // memory flat and is still fast (tail reads are tiny).
     for (const [file] of recent) {
-      const latest = await readLatestTokenCount(file);
-      if (!latest) continue;
+      const series = await readTokenCountSeries(file);
+      if (series.length === 0) continue;
 
-      // Second guard: mtime is heuristic; verify the event is within window.
-      if (latest.timestampMs < cutoffMs) continue;
+      // Walk consecutive pairs; each delta belongs to the LATER event's day.
+      // The first event in the (tail-limited) series has no predecessor here,
+      // so its own total is treated as the baseline and skipped — we only count
+      // increments, which keeps totals honest even when the tail doesn't start
+      // at the session's very first event.
+      for (let i = 1; i < series.length; i++) {
+        const prev = series[i - 1];
+        const curr = series[i];
+        if (curr.timestampMs < cutoffMs) continue;
 
-      const day = new Date(latest.timestampMs).toISOString().slice(0, 10);
-      const usage = latest.info.total_token_usage ?? {};
-      const acc = byDay.get(day) ?? { requests: 0, input: 0, output: 0, total: 0, cached: 0 };
-      acc.requests += 1; // one session contributes one "final" count
-      acc.input += usage.input_tokens ?? 0;
-      acc.output += (usage.output_tokens ?? 0) + (usage.reasoning_output_tokens ?? 0);
-      acc.total += usage.total_tokens ?? 0;
-      acc.cached += usage.cached_input_tokens ?? 0;
-      byDay.set(day, acc);
+        const pu = prev.info.total_token_usage ?? {};
+        const cu = curr.info.total_token_usage ?? {};
+        const dInput = Math.max(0, (cu.input_tokens ?? 0) - (pu.input_tokens ?? 0));
+        // output_tokens already includes reasoning_output_tokens — do NOT add it again.
+        const dOutput = Math.max(0, (cu.output_tokens ?? 0) - (pu.output_tokens ?? 0));
+        const dTotal = Math.max(0, (cu.total_tokens ?? 0) - (pu.total_tokens ?? 0));
+        const dCached = Math.max(0, (cu.cached_input_tokens ?? 0) - (pu.cached_input_tokens ?? 0));
+        if (dTotal === 0 && dInput === 0 && dOutput === 0) continue;
+
+        const day = localDateKey(curr.timestampMs);
+        const acc = byDay.get(day) ?? { requests: 0, input: 0, output: 0, total: 0, cached: 0 };
+        acc.requests += 1;
+        acc.input += dInput;
+        acc.output += dOutput;
+        acc.total += dTotal;
+        acc.cached += dCached;
+        byDay.set(day, acc);
+      }
     }
 
     return Array.from(byDay.entries())
@@ -361,15 +374,15 @@ interface TokenCountHit {
 }
 
 /**
- * Read the most recent token_count event's `info` block from a rollout file.
- * Used for daily usage aggregation. Mirrors readLatestRateLimits' tail-scan.
+ * Read ALL token_count events (within the tail) as a time-ordered series.
+ * Used for incremental daily usage: we diff cumulative totals between
+ * consecutive events to attribute consumption to the correct local day.
  */
-async function readLatestTokenCount(file: string): Promise<TokenCountHit | null> {
+async function readTokenCountSeries(file: string): Promise<TokenCountHit[]> {
   const text = await readTail(file, TAIL_BYTES);
-  if (text === null) return null;
+  if (text === null) return [];
 
-  let best: TokenCountHit | null = null;
-
+  const hits: TokenCountHit[] = [];
   const lines = text.split('\n');
   const start = Math.max(0, lines.length - TAIL_LINES);
   for (let i = start; i < lines.length; i++) {
@@ -385,16 +398,16 @@ async function readLatestTokenCount(file: string): Promise<TokenCountHit | null>
 
     const payload = event.payload as TokenCountPayload | undefined;
     const info = payload?.info;
-    if (!info || (!info.total_token_usage && !info.last_token_usage)) continue;
+    if (!info || !info.total_token_usage) continue;
 
     const ts = event.timestamp ? Date.parse(event.timestamp) : NaN;
     const timestampMs = Number.isNaN(ts) ? 0 : ts;
-    if (!best || timestampMs >= best.timestampMs) {
-      best = { timestampMs, info };
-    }
+    hits.push({ timestampMs, info });
   }
 
-  return best;
+  // Earliest-first so deltas compute naturally.
+  hits.sort((a, b) => a.timestampMs - b.timestampMs);
+  return hits;
 }
 
 /**
@@ -496,3 +509,22 @@ function round1(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.round(value * 10) / 10;
 }
+
+/**
+ * Format a Unix-ms timestamp as a LOCAL-timezone YYYY-MM-DD key (not UTC).
+ * `en-CA` locale yields ISO-order dates without an explicit time zone, and
+ * without `timeZone` it uses the runtime's local zone — so daily buckets align
+ * with the user's calendar day (PRD §7.1).
+ */
+const LOCAL_DATE_FMT = new Intl.DateTimeFormat('en-CA', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+function localDateKey(timestampMs: number): string {
+  return LOCAL_DATE_FMT.format(new Date(timestampMs));
+}
+
+/** Exported for testing the local-timezone bucketing behavior. */
+export { localDateKey as _localDateKeyForTest };
