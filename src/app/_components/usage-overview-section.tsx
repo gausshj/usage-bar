@@ -196,20 +196,30 @@ function DailyChart({ records }: { records: UsageRecord[] }) {
   return (
     <div className="rounded-3xl border border-white/70 bg-white/75 p-6 text-card-foreground shadow-[0_24px_60px_-40px_rgba(15,23,42,0.55)] backdrop-blur">
       <h3 className="text-base font-semibold tracking-tight">Daily Token Usage</h3>
-      <div className="mt-5 flex items-end justify-between gap-2" style={{ height: 160 }}>
+      <div
+        className="mt-5 flex items-end justify-between gap-2"
+        style={{ height: 160 }}
+        role="img"
+        aria-label={`Daily token usage chart. ${records
+          .map((r) => `${r.date}: ${formatTokens(r.total_tokens)}`)
+          .join(', ')}`}
+      >
         {records.map((r) => {
           const h = Math.max(4, Math.round((r.total_tokens / max) * 140));
           return (
             <div
               key={r.date}
               className="flex flex-1 flex-col items-center gap-2"
-              title={`${r.date}: ${formatTokens(r.total_tokens)}`}
+              title={`${r.date}: ${formatTokens(r.total_tokens)} tokens`}
             >
               <div
                 className="w-full rounded-t bg-gradient-to-t from-slate-400 to-slate-700 transition-all"
                 style={{ height: h }}
+                aria-hidden="true"
               />
-              <span className="text-[11px] text-slate-400">{r.date.slice(5)}</span>
+              <span className="text-[11px] text-slate-400">
+                {r.date.slice(5)}: {formatTokens(r.total_tokens)}
+              </span>
             </div>
           );
         })}

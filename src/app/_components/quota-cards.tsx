@@ -158,12 +158,29 @@ function ProviderCard({ snap }: { snap: QuotaSnapshot }) {
           {snap.source.isFallback ? ' · fallback' : ''}
         </span>
         {snap.plan.name && <span>· {snap.plan.name}</span>}
+        {snap.plan.accountLabel && <span>· {snap.plan.accountLabel}</span>}
       </div>
 
-      {/* Error / unconfigured message */}
+      {/* Error / unconfigured / unsupported guidance (#17-3) */}
       {snap.error && (
         <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
           {snap.error.safeMessage}
+          {snap.status === 'unconfigured' && snap.providerId === 'glm_coding_plan' && (
+            <span className="mt-1 block text-slate-500">
+              Set <code className="rounded bg-slate-100 px-1">GLM_CODING_PLAN_TOKEN</code> in .env.local.
+            </span>
+          )}
+          {snap.status === 'unconfigured' && snap.providerId === 'kimi_code' && (
+            <span className="mt-1 block text-slate-500">
+              Run <code className="rounded bg-slate-100 px-1">kimi-cli login</code>, or set{' '}
+              <code className="rounded bg-slate-100 px-1">KIMI_CODE_ACCESS_TOKEN</code>.
+            </span>
+          )}
+          {snap.status === 'unsupported' && (
+            <span className="mt-1 block text-slate-500">
+              Update Codex to the latest version to enable this data source.
+            </span>
+          )}
         </p>
       )}
 
@@ -246,7 +263,11 @@ function BucketBar({ bucket }: { bucket: QuotaBucket }) {
             ? `${formatNum(bucket.used)} / ${formatNum(bucket.limit)} ${bucket.unit ?? ''}`
             : ''}
         </span>
-        {bucket.resetsAt && <span>resets {timeUntil(bucket.resetsAt)}</span>}
+        {bucket.resetsAt && (
+          <span title={bucket.resetsAt /* ISO for debugging */}>
+            resets {formatAbsoluteTime(bucket.resetsAt)} ({timeUntil(bucket.resetsAt)})
+          </span>
+        )}
       </div>
     </div>
   );
@@ -298,4 +319,16 @@ function timeUntil(iso: string): string {
   const min = Math.floor((diff % 3_600_000) / 60_000);
   if (hr >= 1) return `in ${hr}h ${min}m`;
   return `in ${min}m`;
+}
+
+/** Local-timezone absolute time, e.g. "Aug 5, 09:38" (PRD §6.3 / #17). */
+function formatAbsoluteTime(iso: string): string {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return '—';
+  return new Date(ms).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
