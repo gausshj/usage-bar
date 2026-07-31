@@ -55,6 +55,11 @@ export const glmLimitSchema = z
     usage: z.number().optional(),
     remaining: z.number().optional(),
     nextResetTime: z.number().optional(), // ms epoch
+    // MCP tools breakdown (search-prime / web-reader / zread), e.g.
+    // [{ modelCode: 'search-prime', usage: 26 }]
+    usageDetails: z
+      .array(z.object({ modelCode: z.string(), usage: z.number() }).passthrough())
+      .optional(),
   })
   .passthrough(); // tolerate new fields
 

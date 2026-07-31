@@ -29,7 +29,13 @@ describe('GlmProvider', () => {
         data: {
           limits: [
             { type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 42, nextResetTime: 1785436421682 },
-            { type: 'TIME_LIMIT', unit: 5, number: 1, percentage: 1, currentValue: 5, usage: 4000 },
+            {
+              type: 'TIME_LIMIT', unit: 5, number: 1, percentage: 1, currentValue: 5, usage: 4000,
+              usageDetails: [
+                { modelCode: 'search-prime', usage: 3 },
+                { modelCode: 'web-reader', usage: 2 },
+              ],
+            },
           ],
         },
       }),
@@ -41,6 +47,28 @@ describe('GlmProvider', () => {
     expect(snap.buckets).toHaveLength(2);
     expect(snap.buckets[0].usedPercent).toBe(42);
     expect(snap.buckets[0].resetsAt).toContain('2026');
+
+    // TIME_LIMIT is MCP tools usage (联网搜索/网页读取/开源仓库) — a monthly
+    // internet/tool-call quota, NOT a monthly token quota (#37).
+    const mcp = snap.buckets[1];
+    expect(mcp.label).toBe('MCP tools (month)');
+    expect(mcp.metric).toBe('requests');
+    expect(mcp.used).toBe(5);
+    expect(mcp.limit).toBe(4000);
+    // usageDetails surfaced as a readable breakdown (#37).
+    expect(mcp.details).toBe('search-prime=3, web-reader=2');
+  });
+
+  it('labels a TIME_LIMIT without unit/number as plain "MCP tools"', async () => {
+    // Covers the no-period branch: unit/number absent → label has no "(period)".
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, {
+        data: { limits: [{ type: 'TIME_LIMIT', percentage: 3 }] },
+      }),
+    );
+    const snap = await new GlmProvider({ token: 'tok' }).fetch(null);
+    expect(snap.buckets[0].label).toBe('MCP tools');
+    expect(snap.buckets[0].metric).toBe('requests');
   });
 
   it('maps a 401 to error status with auth_failed code', async () => {

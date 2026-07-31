@@ -205,6 +205,14 @@ function ProviderCard({ snap }: { snap: QuotaSnapshot }) {
         </div>
       )}
 
+      {/* Kimi: monthly quota is a product feature but not exposed by the usages
+          API — state this honestly instead of fabricating a window (#37). */}
+      {snap.providerId === 'kimi_code' && isReady && (
+        <p className="mt-4 rounded-lg bg-sky-50 px-3 py-2 text-[11px] text-sky-700">
+          Kimi Code's monthly quota isn't returned by its usage API, so it isn't shown here.
+        </p>
+      )}
+
       {/* Timestamps */}
       <div className="mt-auto pt-4 text-[11px] text-slate-400">
         {snap.observedAt && <div>Observed {timeAgo(snap.observedAt)}</div>}
@@ -269,6 +277,11 @@ function BucketBar({ bucket }: { bucket: QuotaBucket }) {
           </span>
         )}
       </div>
+
+      {/* Optional breakdown of what's inside the window (e.g. GLM MCP tools). */}
+      {bucket.details && (
+        <div className="mt-1 text-[11px] text-slate-400">{bucket.details}</div>
+      )}
     </div>
   );
 }
