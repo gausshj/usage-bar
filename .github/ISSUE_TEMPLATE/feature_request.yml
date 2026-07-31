@@ -1,40 +1,40 @@
-name: ✨ 功能请求
-description: 提出新能力或改进建议
+name: ✨ Feature Request
+description: Propose a new capability or improvement
 title: "[Feature] "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        先确认请求符合 `docs/PRD.md` 的范围——v1 是个人本地优先的三卡配额看板，不做团队计费、成本核算或云端同步（见 PRD §4.2 非目标）。
+        Please check the scope in `docs/PRD.md` first — v1 is a personal, local-first, three-card quota dashboard. Team billing, cost accounting, and cloud sync are explicit non-goals (PRD §4.2).
 
   - type: textarea
     id: problem
     attributes:
-      label: 要解决的问题
-      description: 你遇到的场景或痛点是什么？
-      placeholder: 当我在 … 时，我希望 …
+      label: What problem does this solve?
+      description: Describe the scenario or pain point.
+      placeholder: When I …, I want …
     validations:
       required: true
 
   - type: textarea
     id: proposal
     attributes:
-      label: 建议方案
-      description: 你期望的行为或交互
+      label: Proposed solution
+      description: The behavior or interaction you expect.
     validations:
       required: true
 
   - type: textarea
     id: alternatives
     attributes:
-      label: 考虑过的替代方案
-      description: 可选
+      label: Alternatives considered
+      description: Optional.
 
   - type: checkboxes
     id: scope-check
     attributes:
-      label: 范围确认
+      label: Scope check
       options:
-        - label: 我确认该请求不属于 PRD §4.2 列出的非目标
+        - label: I confirm this request is not one of the non-goals listed in PRD §4.2
           required: true
