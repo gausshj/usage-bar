@@ -167,4 +167,33 @@ describe('GlmProvider', () => {
     const snap = await p.fetch(null);
     expect(snap.status).toBe('unconfigured');
   });
+
+  it('maps a 403 to error status with forbidden code', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(403, {}),
+    );
+    const snap = await new GlmProvider({ token: 't' }).fetch(null);
+    expect(snap.status).toBe('error');
+    expect(snap.error?.code).toBe('forbidden');
+    expect(snap.error?.retryable).toBe(false);
+  });
+
+  it('maps a 429 to unavailable (transient, retryable)', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(429, {}),
+    );
+    const snap = await new GlmProvider({ token: 't' }).fetch(null);
+    expect(snap.status).toBe('unavailable');
+    expect(snap.error?.code).toBe('transient');
+    expect(snap.error?.retryable).toBe(true);
+  });
+
+  it('maps a timeout (abort) to unavailable with retryable', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(
+      Object.assign(new Error('request timed out'), { name: 'AbortError' }),
+    );
+    const snap = await new GlmProvider({ token: 't' }).fetch(null);
+    expect(snap.status).toBe('unavailable');
+    expect(snap.error?.retryable).toBe(true);
+  });
 });
