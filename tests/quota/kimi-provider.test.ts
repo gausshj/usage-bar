@@ -91,4 +91,25 @@ describe('KimiProvider', () => {
     expect(new KimiProvider({ accessToken: 't' }).isConfigured()).toBe(true);
     expect(new KimiProvider({ accessToken: '' }).isConfigured()).toBe(false);
   });
+
+  it('returns a controlled error on malformed response shape (schema drift)', async () => {
+    // `limits` is a string instead of an array → schema rejects.
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, { limits: 'not-an-array' }),
+    );
+    const snap = await new KimiProvider({ accessToken: 't' }).fetch(null);
+    expect(snap.status).not.toBe('ready');
+    expect(snap.error).toBeDefined();
+  });
+
+  it('tolerates extra unknown fields in the response (passthrough)', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, {
+        usage: { used: '10', limit: '100' },
+        futureField: { x: 1 },
+      }),
+    );
+    const snap = await new KimiProvider({ accessToken: 't' }).fetch(null);
+    expect(snap.status).toBe('ready');
+  });
 });

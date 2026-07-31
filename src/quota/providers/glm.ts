@@ -12,6 +12,7 @@
 // ============================================================================
 
 import { fetchJson } from '../http.js';
+import { parseWithSchema, glmQuotaResponseSchema, type GlmQuotaResponseParsed } from '../schemas.js';
 import type {
   QuotaBucket,
   QuotaBalance,
@@ -41,20 +42,8 @@ const REGION_BASE_URLS: Record<GlmRegion, string> = {
 
 // Raw response shapes -------------------------------------------------------
 
-interface GlmLimit {
-  type: string;
-  percentage?: number;
-  unit?: number;
-  number?: number;
-  currentValue?: number;
-  usage?: number;
-  remaining?: number;
-  nextResetTime?: number; // ms epoch
-}
-interface GlmQuotaResponse {
-  data?: { limits?: GlmLimit[] };
-  limits?: GlmLimit[];
-}
+/** A single GLM limit entry (type derived from the zod schema). */
+type GlmLimit = NonNullable<NonNullable<NonNullable<GlmQuotaResponseParsed['data']>['limits']>[number]>;
 
 export class GlmProvider implements QuotaProviderAdapter {
   readonly providerId = PROVIDER_ID;
@@ -79,14 +68,15 @@ export class GlmProvider implements QuotaProviderAdapter {
     const url = `${this.baseUrl}/api/monitor/usage/quota/limit`;
 
     try {
-      const result = await fetchJson<GlmQuotaResponse>('glm', url, {
+      const result = await fetchJson<unknown>('glm', url, {
         headers: {
           Authorization: this.token,
           'Accept-Language': 'en-US,en',
           'Content-Type': 'application/json',
         },
       });
-      return this.toSnapshot(result.value, fetchedAt, previous);
+      const parsed = parseWithSchema('glm', glmQuotaResponseSchema, result.value);
+      return this.toSnapshot(parsed, fetchedAt, previous);
     } catch (err) {
       return this.toErrorSnapshot(err, fetchedAt, previous);
     }
@@ -95,7 +85,7 @@ export class GlmProvider implements QuotaProviderAdapter {
   // -----------------------------------------------------------------
 
   private toSnapshot(
-    body: GlmQuotaResponse,
+    body: GlmQuotaResponseParsed,
     fetchedAt: string,
     previous: QuotaSnapshot | null,
   ): QuotaSnapshot {
@@ -149,7 +139,14 @@ export class GlmProvider implements QuotaProviderAdapter {
 function limitToBucket(limit: GlmLimit): QuotaBucket | null {
   // Known limit types get a friendly window label from {type, unit, number}.
   const label = describeGlmWindow(limit);
-  const metric = limit.type === 'TIME_LIMIT' ? 'time' : 'tokens';
+  // Unknown limit types are surfaced as 'unknown' metric buckets (not dropped)
+  // so a new type doesn't silently disappear, but is visibly distinct (PRD #13).
+  const isKnown = limit.type === 'TOKENS_LIMIT' || limit.type === 'TIME_LIMIT';
+  const metric: QuotaBucket['metric'] = !isKnown
+    ? 'unknown'
+    : limit.type === 'TIME_LIMIT'
+      ? 'time'
+      : 'tokens';
   const usedPercent = typeof limit.percentage === 'number' ? limit.percentage : null;
 
   return {
