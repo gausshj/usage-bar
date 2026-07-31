@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { KimiProvider } from '../../src/quota/providers/kimi.js';
@@ -146,5 +149,104 @@ describe('KimiProvider', () => {
     expect(snap.status).toBe('unavailable');
     expect(snap.error?.code).toBe('transient');
     expect(snap.error?.retryable).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OAuth token refresh path (issue #32)
+// ---------------------------------------------------------------------------
+
+describe('KimiProvider token refresh', () => {
+  const originalFetch = globalThis.fetch;
+  let dir: string;
+  let credsPath: string;
+
+  beforeEach(async () => {
+    globalThis.fetch = vi.fn();
+    dir = await mkdtemp(join(tmpdir(), 'kimi-creds-'));
+    credsPath = join(dir, 'kimi-code.json');
+  });
+  afterEach(async () => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('refreshes an expired access_token via refresh_token, then fetches usage', async () => {
+    // Stored creds: expired token (expires_at in the past) + a refresh_token.
+    await writeFile(
+      credsPath,
+      JSON.stringify({
+        access_token: 'old-expired',
+        refresh_token: 'valid-refresh',
+        expires_at: Math.floor(Date.now() / 1000) - 3600, // 1h ago
+        token_type: 'Bearer',
+        expires_in: 900,
+        scope: 'kimi-code',
+      }),
+    );
+
+    const mock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    // 1st call → OAuth refresh endpoint returns a new access_token.
+    // 2nd call → usages endpoint returns data.
+    mock.mockImplementation(async (url: string) => {
+      if (String(url).includes('auth.kimi.com')) {
+        return jsonResponse(200, {
+          access_token: 'new-refreshed',
+          refresh_token: 'rotated-refresh',
+          token_type: 'Bearer',
+          expires_in: 900,
+          scope: 'kimi-code',
+        });
+      }
+      return jsonResponse(200, { usage: { used: '5', limit: '100' } });
+    });
+
+    const snap = await new KimiProvider({ credentialsPath: credsPath }).fetch(null);
+    expect(snap.status).toBe('ready');
+    expect(snap.buckets[0].used).toBe(5);
+    // The usages request used the refreshed token, not the old one.
+    const usagesCall = mock.mock.calls.find((c) => String(c[0]).includes('/usages'));
+    expect((usagesCall![1].headers as Record<string, string>).Authorization).toBe(
+      'Bearer new-refreshed',
+    );
+  });
+
+  it('returns unconfigured when refresh fails (revoked refresh_token)', async () => {
+    await writeFile(
+      credsPath,
+      JSON.stringify({
+        access_token: 'old-expired',
+        refresh_token: 'revoked',
+        expires_at: Math.floor(Date.now() / 1000) - 3600,
+      }),
+    );
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(401, { error: 'invalid_grant' }),
+    );
+
+    const snap = await new KimiProvider({ credentialsPath: credsPath }).fetch(null);
+    expect(snap.status).toBe('unconfigured');
+    expect(snap.error?.code).toBe('token_expired');
+  });
+
+  it('uses the stored token directly when not expired (no refresh call)', async () => {
+    await writeFile(
+      credsPath,
+      JSON.stringify({
+        access_token: 'still-valid',
+        refresh_token: 'unused',
+        expires_at: Math.floor(Date.now() / 1000) + 3600, // 1h in future
+        token_type: 'Bearer',
+        expires_in: 900,
+        scope: 'kimi-code',
+      }),
+    );
+    const mock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mock.mockResolvedValue(jsonResponse(200, { usage: { used: '1', limit: '10' } }));
+
+    await new KimiProvider({ credentialsPath: credsPath }).fetch(null);
+    // Only the usages call happened — no refresh.
+    expect(mock.mock.calls.every((c) => !String(c[0]).includes('auth.kimi.com'))).toBe(true);
   });
 });
