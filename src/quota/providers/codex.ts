@@ -230,7 +230,10 @@ async function rolloutFallback(
       providerId: PROVIDER_ID,
       status: 'ready',
       fetchedAt,
-      observedAt: fetchedAt,
+      // observedAt = when the rollout data was actually generated (the latest
+      // rate_limits event time), NOT when we read it. This is what makes a
+      // stale snapshot honestly report its age (PRD §8.1 / issue #10).
+      observedAt: snap.observedAt != null ? new Date(snap.observedAt).toISOString() : fetchedAt,
       source: ROLLOUT_SOURCE,
       plan: { name: null, accountLabel: null },
       buckets,

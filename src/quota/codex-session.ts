@@ -38,6 +38,8 @@ export interface QuotaSnapshot {
   provider: 'codex';
   displayName: string;
   fetchedAt: number;
+  /** When the data was actually observed (latest event timestamp), in ms. */
+  observedAt?: number;
   buckets: QuotaBucket[];
   error?: { message: string; code?: string };
 }
@@ -191,6 +193,7 @@ export class CodexSessionQuotaSource implements QuotaSource {
         provider: 'codex',
         displayName: this.displayName,
         fetchedAt,
+        observedAt: best.timestampMs,
         buckets,
       };
     } catch (error) {
