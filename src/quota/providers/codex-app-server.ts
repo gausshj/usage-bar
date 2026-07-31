@@ -15,6 +15,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { homedir } from 'node:os';
 
+import { redact } from '../http.js';
+
 /** A response or notification received from the server. */
 interface JsonRpcMessage {
   id?: number;
@@ -54,6 +56,8 @@ export class CodexAppServerClient {
   private buffer = '';
   private nextId = 0;
   private initialized = false;
+  /** The initialize result, carrying userAgent/version (issue #14). */
+  private serverInfo: { userAgent?: string } | null = null;
   private readonly pending = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (err: Error) => void }
@@ -76,24 +80,35 @@ export class CodexAppServerClient {
     this.proc = spawn(
       this.binaryPath,
       ['app-server', '--listen', 'stdio://'],
-      { env: { ...process.env, CODEX_HOME: this.codexHome }, stdio: ['pipe', 'pipe', 'pipe'] },
-    );
+      {
+        // Security (issue #14): do NOT inherit the full process.env — it may
+        // contain GLM/Kimi tokens. Only pass what the App Server needs.
+        env: buildSandboxEnv(this.codexHome),
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    ) as ChildProcessWithoutNullStreams;
 
     this.proc.stdout.setEncoding('utf8');
     this.proc.stdout.on('data', (chunk: string) => this.onData(chunk));
     this.proc.on('error', (err) => this.failAll(err));
 
-    // Perform the mandatory initialize request.
-    await this.request(
+    // Perform the mandatory initialize request, and retain the server's
+    // reported userAgent for capability detection / source.version (#14).
+    this.serverInfo = (await this.request(
       'initialize',
       {
         clientInfo: { name: 'usage-bar', title: 'Usage Bar', version: '0.1.0' },
       },
       this.initTimeoutMs,
-    );
+    )) as { userAgent?: string } | null;
     // Then the initialized notification (no id, no response expected).
     this.notify('initialized');
     this.initialized = true;
+  }
+
+  /** The server's userAgent from the initialize handshake (e.g. "codex 0.x.y"). */
+  getServerInfo(): { userAgent?: string } | null {
+    return this.serverInfo;
   }
 
   /** Send a method call and await its result. */
@@ -179,7 +194,9 @@ export class CodexAppServerClient {
     if (msg.id !== undefined && this.pending.has(msg.id)) {
       const handler = this.pending.get(msg.id)!;
       if (msg.error) {
-        handler.reject(new Error(`codex app-server error ${msg.error.code}: ${msg.error.message}`));
+        // Redact anything token-like from the server's error text (issue #14).
+        const safeMsg = redact(String(msg.error.message));
+        handler.reject(new Error(`codex app-server error ${msg.error.code}: ${safeMsg}`));
       } else {
         handler.resolve(msg.result);
       }
@@ -196,8 +213,25 @@ export class CodexAppServerClient {
 }
 
 // ---------------------------------------------------------------------------
-// Binary resolution
+// Binary resolution & process sandboxing
 // ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal environment for the spawned App Server process — WITHOUT
+ * inheriting the full process.env (which may carry GLM/Kimi tokens, issue #14).
+ * We pass through only what the binary needs to run and locate its home/config.
+ */
+function buildSandboxEnv(codexHome: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    NODE_ENV: process.env.NODE_ENV ?? 'production',
+    CODEX_HOME: codexHome,
+    PATH: process.env.PATH ?? '',
+    HOME: process.env.HOME ?? '',
+    LANG: process.env.LANG ?? 'en_US.UTF-8',
+  };
+  if (process.env.USER) env.USER = process.env.USER;
+  return env;
+}
 
 /**
  * Locate the codex binary. Checks PATH first, then the known macOS app bundle
