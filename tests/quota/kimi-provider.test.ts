@@ -324,6 +324,37 @@ describe('KimiProvider token refresh', () => {
     expect(snap.error?.code).toBe('token_expired');
   });
 
+  it('returns the stale access_token when expired but no refresh_token to renew', async () => {
+    // access_token present but expired, no refresh_token → resolveAccessToken
+    // returns the stale token via `creds.access_token ?? ''`; usages then 401.
+    await writeFile(
+      credsPath,
+      JSON.stringify({ access_token: 'stale', expires_at: 1 }),
+    );
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(401, {}),
+    );
+    const snap = await new KimiProvider({ credentialsPath: credsPath }).fetch(null);
+    expect(snap.status).toBe('unconfigured');
+  });
+
+  it('returns empty when refresh succeeds but yields no access_token', async () => {
+    // refresh returns 200 but no access_token field → refreshed.access_token ?? ''
+    await writeFile(
+      credsPath,
+      JSON.stringify({ access_token: 'old', refresh_token: 'rt', expires_at: 1 }),
+    );
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) => {
+      if (String(url).includes('auth.kimi.com')) {
+        return jsonResponse(200, { refresh_token: 'rt2', expires_in: 900 }); // no access_token
+      }
+      return jsonResponse(200, { usage: { used: '1', limit: '10' } });
+    });
+    const snap = await new KimiProvider({ credentialsPath: credsPath }).fetch(null);
+    // No usable access token → unconfigured.
+    expect(snap.status).toBe('unconfigured');
+  });
+
   it('still fetches successfully when writing refreshed creds fails (non-fatal)', async () => {
     const { mkdir, chmod } = await import('node:fs/promises');
     // creds live in a subdir; after writing creds we make the subdir read-only

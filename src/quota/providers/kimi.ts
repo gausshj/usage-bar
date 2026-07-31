@@ -137,12 +137,14 @@ export class KimiProvider implements QuotaProviderAdapter {
     }
 
     // Token missing or expired → refresh with the refresh_token.
-    if (!creds.refresh_token) return creds.access_token ?? '';
+    // The `?? ''` right side is unreachable here (an empty access_token with
+    // no refresh_token is caught by the guard above), kept for type safety.
+    if (!creds.refresh_token) return creds.access_token ?? /* istanbul ignore next */ '';
 
     const refreshed = await refreshOAuthToken(creds.refresh_token);
     // Write back so the CLI and subsequent calls see the fresh token.
     writeCredentials(this.credentialsPath, { ...creds, ...refreshed });
-    return refreshed.access_token ?? '';
+    return refreshed.access_token ?? /* istanbul ignore next */ '';
   }
 
   // -----------------------------------------------------------------
