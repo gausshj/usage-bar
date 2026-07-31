@@ -186,10 +186,11 @@ function limitToBucket(limit: GlmLimit): QuotaBucket | null {
   // Unknown limit types are surfaced as 'unknown' metric buckets (not dropped)
   // so a new type doesn't silently disappear, but is visibly distinct (PRD #13).
   const isKnown = limit.type === 'TOKENS_LIMIT' || limit.type === 'TIME_LIMIT';
+  // TIME_LIMIT is MCP tool-call volume → metric 'requests', not 'time' (#37).
   const metric: QuotaBucket['metric'] = !isKnown
     ? 'unknown'
     : limit.type === 'TIME_LIMIT'
-      ? 'time'
+      ? 'requests'
       : 'tokens';
   const usedPercent = typeof limit.percentage === 'number' ? limit.percentage : null;
 
@@ -209,7 +210,17 @@ function limitToBucket(limit: GlmLimit): QuotaBucket | null {
 }
 
 function describeGlmWindow(limit: GlmLimit): string {
-  const typeLabel = limit.type === 'TOKENS_LIMIT' ? 'tokens' : limit.type === 'TIME_LIMIT' ? 'usage' : limit.type;
+  // TIME_LIMIT is the MCP tool-call volume window, NOT a monthly token quota
+  // (verified against the official glm-plan-usage plugin + a real account, #37).
+  // The window period is still shown via its unit/number, but the label names
+  // the metric honestly.
+  if (limit.type === 'TIME_LIMIT') {
+    const period = limit.unit != null && limit.number != null
+      ? GLM_UNIT_MINUTES_LABEL(limit.unit)
+      : null;
+    return period ? `MCP calls (${period})` : 'MCP calls';
+  }
+  const typeLabel = limit.type === 'TOKENS_LIMIT' ? 'tokens' : limit.type;
   if (limit.unit != null && limit.number != null) {
     const unitName = GLM_UNIT_MINUTES_LABEL(limit.unit);
     return `${limit.number}-${unitName} (${typeLabel})`;

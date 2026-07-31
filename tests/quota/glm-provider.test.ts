@@ -41,6 +41,13 @@ describe('GlmProvider', () => {
     expect(snap.buckets).toHaveLength(2);
     expect(snap.buckets[0].usedPercent).toBe(42);
     expect(snap.buckets[0].resetsAt).toContain('2026');
+
+    // TIME_LIMIT is MCP call volume (monthly), NOT a monthly token quota (#37).
+    const mcp = snap.buckets[1];
+    expect(mcp.label).toBe('MCP calls (month)');
+    expect(mcp.metric).toBe('requests');
+    expect(mcp.used).toBe(5);
+    expect(mcp.limit).toBe(4000);
   });
 
   it('maps a 401 to error status with auth_failed code', async () => {
