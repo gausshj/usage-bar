@@ -48,10 +48,7 @@ const DEFAULT_CREDENTIALS_PATH = `${homedir()}/.kimi-code/credentials/kimi-code.
 
 type RawUsagesResponse = KimiUsagesResponseParsed;
 type RawUsageDetail = NonNullable<RawUsagesResponse['usage']>;
-type RawUsageWindow = NonNullable<NonNullable<NonNullable<RawUsagesResponse['limits']>[number]['window']>>;
-type RawLimitEntry = NonNullable<NonNullable<RawUsagesResponse['limits']>[number]>;
-type RawBoosterWallet = NonNullable<RawUsagesResponse['boosterWallet']>;
-type RawBoosterBalance = NonNullable<RawBoosterWallet['balance']>;
+type RawUsageWindow = NonNullable<NonNullable<NonNullable<RawUsagesResponse['limits']>[number]>['window']>;
 
 interface StoredCredentials {
   access_token?: string;
