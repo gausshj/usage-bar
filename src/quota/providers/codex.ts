@@ -22,58 +22,45 @@ import type {
   QuotaSnapshot,
   QuotaBalance,
 } from '../contract.js';
+import {
+  parseWithSchema,
+  codexRateLimitsResponseSchema,
+  type CodexRateLimitsResponseParsed,
+} from '../schemas.js';
 import { CodexAppServerClient } from './codex-app-server.js';
 
 // ---------------------------------------------------------------------------
-// Raw App Server response shapes (camelCase on the wire)
+// Response types derived from the zod schema
 // ---------------------------------------------------------------------------
 
-interface RateLimitWindow {
-  usedPercent: number | null;
-  windowDurationMins: number | null;
-  resetsAt: number | null; // Unix seconds
-}
-interface CreditsSnapshot {
-  hasCredits: boolean | null;
-  unlimited: boolean | null;
-  balance: string | null;
-}
-interface SpendControlLimit {
-  limit: string;
-  used: string;
-  remainingPercent: number | null;
-  resetsAt: number | null;
-}
-interface RateLimitSnapshot {
-  limitId: string | null;
-  primary: RateLimitWindow | null;
-  secondary: RateLimitWindow | null;
-  credits: CreditsSnapshot | null;
-  individualLimit: SpendControlLimit | null;
-  planType: string | null;
-}
-interface GetAccountRateLimitsResponse {
-  rateLimits: RateLimitSnapshot | null;
-}
+type RateLimitsResponse = CodexRateLimitsResponseParsed;
+type RateLimitSnapshot = NonNullable<RateLimitsResponse['rateLimits']>;
+type RateLimitWindow = NonNullable<RateLimitSnapshot['primary']>;
 
 interface AppServerConfig {
   /** Override CODEX_HOME (defaults to ~/.codex). */
   codexHome?: string;
-  /** Inject a client (testing). */
-  client?: Pick<CodexAppServerClient, 'connect' | 'call' | 'done'>;
+  /** Inject a client (testing). Must expose getServerInfo for capability detection. */
+  client?: Pick<CodexAppServerClient, 'connect' | 'call' | 'done' | 'getServerInfo'>;
 }
 
 const PROVIDER_ID = 'codex_chatgpt' as const;
 const DISPLAY_NAME = 'Codex';
-const APP_SERVER_SOURCE = { kind: 'official_protocol' as const, name: 'Codex App Server', version: null, isFallback: false };
-const ROLLOUT_SOURCE = { kind: 'local_estimate' as const, name: 'Codex rollout files', version: null, isFallback: true };
+interface SourceDescriptor {
+  kind: 'official_protocol' | 'local_estimate' | 'official_compatibility';
+  name: string;
+  version: string | null;
+  isFallback: boolean;
+}
+const APP_SERVER_SOURCE: SourceDescriptor = { kind: 'official_protocol', name: 'Codex App Server', version: null, isFallback: false };
+const ROLLOUT_SOURCE: SourceDescriptor = { kind: 'local_estimate', name: 'Codex rollout files', version: null, isFallback: true };
 
 export class CodexProvider implements QuotaProviderAdapter {
   readonly providerId = PROVIDER_ID;
   readonly displayName = DISPLAY_NAME;
 
   private readonly codexHome: string;
-  private readonly clientFactory: () => Pick<CodexAppServerClient, 'connect' | 'call' | 'done'>;
+  private readonly clientFactory: () => Pick<CodexAppServerClient, 'connect' | 'call' | 'done' | 'getServerInfo'>;
 
   constructor(config: AppServerConfig = {}) {
     this.codexHome = config.codexHome ?? `${homedir()}/.codex`;
@@ -95,16 +82,23 @@ export class CodexProvider implements QuotaProviderAdapter {
     const client = this.clientFactory();
     try {
       await client.connect();
-      const result = await client.call<GetAccountRateLimitsResponse>('account/rateLimits/read');
-      const snapshot = RateLimitsToSnapshot(result, fetchedAt, previous);
-      // usage data is fetched separately by the usage module; here we only
-      // surface quota. Mark observedAt as now since the App Server read is live.
-      return snapshot;
-    } catch {
-      // Fall through to rollout estimate.
+
+      // Capability detection: read the server's reported version (issue #14).
+      const serverInfo = client.getServerInfo?.() ?? null;
+      const version = serverInfo?.userAgent ?? null;
+
+      const raw = await client.call<unknown>('account/rateLimits/read');
+      // Runtime schema validation (issue #13, Codex part).
+      const result = parseWithSchema('codex', codexRateLimitsResponseSchema, raw);
+      return rateLimitsToSnapshot(result, fetchedAt, previous, version);
+    } catch (err) {
+      // Capability explicitly unsupported (method not found / low version) →
+      // surface as `unsupported`, NOT a silent fallback (issue #14).
+      if (isUnsupportedMethod(err)) {
+        return unsupportedSnapshot(fetchedAt, previous);
+      }
+      // Otherwise transient (process missing, timeout, network) → rollout fallback.
     } finally {
-      // `done` may not exist on an injected mock that threw before assignment;
-      // guard via optional chaining. Real clients always have it.
       (client as CodexAppServerClient).done?.();
     }
 
@@ -117,14 +111,15 @@ export class CodexProvider implements QuotaProviderAdapter {
 // App Server response → QuotaSnapshot
 // ---------------------------------------------------------------------------
 
-function RateLimitsToSnapshot(
-  result: GetAccountRateLimitsResponse,
+function rateLimitsToSnapshot(
+  result: RateLimitsResponse,
   fetchedAt: string,
   previous: QuotaSnapshot | null,
+  version: string | null,
 ): QuotaSnapshot {
   const limits = result.rateLimits;
   if (!limits) {
-    return emptySnapshot(fetchedAt, APP_SERVER_SOURCE, previous, {
+    return emptySnapshot(fetchedAt, withVersion(APP_SERVER_SOURCE, version), previous, {
       code: 'empty_rate_limits',
       safeMessage: 'App Server returned no rate limits.',
       retryable: true,
@@ -155,16 +150,40 @@ function RateLimitsToSnapshot(
     status: 'ready',
     fetchedAt,
     observedAt: fetchedAt,
-    source: APP_SERVER_SOURCE,
+    source: withVersion(APP_SERVER_SOURCE, version),
     plan: { name: limits.planType ?? null, accountLabel: null },
     buckets,
     balances: balances.length > 0 ? balances : undefined,
   };
 }
 
+/** Attach the detected server version to a source descriptor. */
+function withVersion(base: SourceDescriptor, version: string | null): SourceDescriptor {
+  return { ...base, version };
+}
+
+/** True if the error means the App Server explicitly lacks a method (unsupported). */
+function isUnsupportedMethod(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  // JSON-RPC -32601 method not found, or a "not supported" hint.
+  return msg.includes('-32601') || msg.includes('method not found') || msg.includes('not supported');
+}
+
+/** Snapshot for an explicitly unsupported capability (NOT a silent fallback). */
+function unsupportedSnapshot(fetchedAt: string, previous: QuotaSnapshot | null): QuotaSnapshot {
+  return emptySnapshot(fetchedAt, APP_SERVER_SOURCE, previous, {
+    code: 'unsupported_capability',
+    safeMessage: 'This Codex version does not support the required App Server methods.',
+    retryable: false,
+  }, 'unsupported');
+}
+
 function windowToBucket(id: string, w: RateLimitWindow): QuotaBucket {
   const label = describeWindow(w.windowDurationMins);
-  const usedPercent = w.usedPercent;
+  const usedPercent = w.usedPercent ?? null;
+  const windowMins = w.windowDurationMins ?? null;
+  const resetsAt = w.resetsAt ?? null;
   return {
     id,
     label,
@@ -174,12 +193,12 @@ function windowToBucket(id: string, w: RateLimitWindow): QuotaBucket {
     limit: null,
     remaining: usedPercent != null ? 100 - usedPercent : null,
     usedPercent,
-    windowSeconds: w.windowDurationMins != null ? w.windowDurationMins * 60 : null,
-    resetsAt: w.resetsAt != null ? new Date(w.resetsAt * 1000).toISOString() : null,
+    windowSeconds: windowMins != null ? windowMins * 60 : null,
+    resetsAt: resetsAt != null ? new Date(resetsAt * 1000).toISOString() : null,
   };
 }
 
-function describeWindow(mins: number | null): string {
+function describeWindow(mins: number | null | undefined): string {
   if (mins == null) return 'quota';
   if (mins === 300) return '5-hour';
   if (mins === 10080) return 'weekly';
