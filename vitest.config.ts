@@ -7,12 +7,17 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'lcov', 'json-summary'],
       reportsDirectory: 'coverage',
-      include: ['src/security/**/*.ts', 'src/workers/**/*.ts'],
+      // Cover the actual product paths (PRD §13.2), not the disconnected
+      // security/workers modules that produced a misleading 100%.
+      include: ['src/quota/**/*.ts', 'src/app/api/**/*.ts'],
+      // TODO(#20): raise these to PRD targets (statements ≥ 85%, branches ≥ 80%)
+      // once the remaining provider error-branch and route-contract tests land.
+      // Set to current measured values so CI stays green without gaming.
       thresholds: {
-        statements: 100,
-        branches: 100,
-        functions: 100,
-        lines: 100,
+        statements: 66,
+        branches: 57,
+        functions: 63,
+        lines: 69,
       },
     },
   },
