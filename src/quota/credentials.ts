@@ -113,7 +113,6 @@ export class SecureCredentialResolver implements CredentialResolver {
 
 /** A resolver that always fails — used when no credential store is wired. */
 export class NoopCredentialResolver implements CredentialResolver {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async reveal(credentialId: string, _expected?: ExpectedScope): Promise<string> {
     throw new CredentialUnavailableError(`no credential store configured (id: ${credentialId})`);
   }
