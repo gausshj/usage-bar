@@ -122,4 +122,39 @@ describe('GlmProvider', () => {
     const snap = await new GlmProvider({ token: 't' }).fetch(null);
     expect(snap.status).toBe('ready'); // unknown fields ignored, not rejected
   });
+
+  it('resolves the token via credentialId with scope validation (#22)', async () => {
+    const resolver = {
+      reveal: vi.fn().mockResolvedValue('resolved-token'),
+    };
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, { data: { limits: [{ type: 'TOKENS_LIMIT', percentage: 7, unit: 3, number: 5 }] } }),
+    );
+
+    const p = new GlmProvider({ credentialId: 'cred-123', resolver });
+    const snap = await p.fetch(null);
+
+    expect(resolver.reveal).toHaveBeenCalledWith('cred-123', {
+      provider: 'glm_coding_plan',
+      kind: 'api_key',
+    });
+    expect(snap.status).toBe('ready');
+    const init = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+    expect((init.headers as Record<string, string>).Authorization).toBe('resolved-token');
+  });
+
+  it('maps a resolver failure (scope mismatch / revoked) to unconfigured', async () => {
+    const resolver = {
+      reveal: vi.fn().mockRejectedValue(new Error('scope mismatch')),
+    };
+    const p = new GlmProvider({ credentialId: 'cred-x', resolver });
+    const snap = await p.fetch(null);
+    expect(snap.status).toBe('unconfigured');
+    expect(snap.error?.code).toBe('credential_unavailable');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('throws at construction if neither token nor credentialId is set', () => {
+    expect(() => new GlmProvider({})).toThrow(/requires either/);
+  });
 });

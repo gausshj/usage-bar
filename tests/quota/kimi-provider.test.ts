@@ -123,6 +123,37 @@ describe('KimiProvider', () => {
     expect(snap.status).toBe('ready');
   });
 
+  it('resolves the access token via credentialId with scope validation (#22)', async () => {
+    const resolver = {
+      reveal: vi.fn().mockResolvedValue('resolved-oauth-token'),
+    };
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, { usage: { used: '9', limit: '100' } }),
+    );
+
+    const p = new KimiProvider({ credentialId: 'cred-kimi', resolver });
+    const snap = await p.fetch(null);
+
+    expect(resolver.reveal).toHaveBeenCalledWith('cred-kimi', {
+      provider: 'kimi_code',
+      kind: 'oauth_token',
+    });
+    expect(snap.status).toBe('ready');
+    expect(snap.buckets[0].used).toBe(9);
+  });
+
+  it('maps a resolver failure to a safe error without calling usages', async () => {
+    const resolver = { reveal: vi.fn().mockRejectedValue(new Error('revoked')) };
+    const p = new KimiProvider({ credentialId: 'cred-bad', resolver });
+    const snap = await p.fetch(null);
+    expect(snap.status).toBe('unconfigured');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('isConfigured returns true when a credentialId is set', () => {
+    expect(new KimiProvider({ credentialId: 'cred', resolver: { reveal: async () => 'x' } }).isConfigured()).toBe(true);
+  });
+
   it('maps a 403 to error status with forbidden code', async () => {
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
       jsonResponse(403, {}),
