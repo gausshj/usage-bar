@@ -2,6 +2,8 @@
 
 > Coding Plan 配额看板 — Codex / GLM Coding Plan / Kimi Code 的本地用量监控
 
+[English](./README.en.md) | 简体中文
+
 ## 简介
 
 Usage-Bar 是一个本地优先的 Web Dashboard，帮助同时订阅多个 AI 编程服务的开发者，在一个页面查看当前配额、剩余额度、重置时间和用量明细。
