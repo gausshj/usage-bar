@@ -163,4 +163,35 @@ describe('QuotaService', () => {
     expect(result[1].status).toBe('unavailable'); // glm failed
     expect(result[2].status).toBe('unconfigured'); // kimi not configured
   });
+
+  it('does NOT cache failed results (so retries are not suppressed)', async () => {
+    // Adapter returns an error snapshot (not a throw).
+    const codex = makeAdapter('codex_chatgpt', {
+      configured: true,
+      snapshot: {
+        ...readySnapshot('codex_chatgpt'),
+        status: 'error',
+        buckets: [],
+        error: { code: 'x', safeMessage: 'fail', retryable: true },
+      },
+    });
+    const svc = new QuotaService({ adapters: adaptersFrom({ codex_chatgpt: codex }), cacheTtlMs: 10_000 });
+
+    await svc.readAll();
+    // A second read should call fetch again (error was not cached).
+    await svc.readAll();
+    expect(codex.fetchCalls).toBe(2);
+  });
+
+  it('caches stale results (usable degraded data)', async () => {
+    const codex = makeAdapter('codex_chatgpt', {
+      configured: true,
+      snapshot: { ...readySnapshot('codex_chatgpt'), status: 'stale' },
+    });
+    const svc = new QuotaService({ adapters: adaptersFrom({ codex_chatgpt: codex }), cacheTtlMs: 10_000 });
+
+    await svc.readAll();
+    await svc.readAll();
+    expect(codex.fetchCalls).toBe(1); // stale WAS cached
+  });
 });

@@ -38,6 +38,8 @@ export async function fetchJson<T>(
   const baseDelayMs = options.baseDelayMs ?? 500;
 
   let lastError: Error | null = null;
+  /** Server-advised delay from a Retry-After header, consumed by the back-off. */
+  let pendingRetryAfterMs: number | null = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -61,11 +63,16 @@ export async function fetchJson<T>(
       }
 
       const body = await res.text().catch(() => '');
-      const error = classifyError(providerLabel, res.status, redact(body), parseRetryAfter(res));
+      const retryAfterMs = parseRetryAfter(res);
+      const error = classifyError(providerLabel, res.status, redact(body), retryAfterMs);
 
       // Non-retryable: stop immediately.
       if (!error.isRetryable) {
         throw error;
+      }
+      // Stash Retry-After so the back-off below honors the server's hint.
+      if (retryAfterMs != null) {
+        pendingRetryAfterMs = retryAfterMs;
       }
       lastError = error;
     } catch (err) {
@@ -80,9 +87,14 @@ export async function fetchJson<T>(
       }
     }
 
-    // Back off before the next retry (with jitter).
+    // Back off before the next retry. Prefer the server's Retry-After when
+    // given (PRD §10); otherwise exponential back-off with jitter.
     if (attempt < maxRetries) {
-      const delay = baseDelayMs * 2 ** attempt + Math.random() * baseDelayMs;
+      const delay =
+        pendingRetryAfterMs != null
+          ? pendingRetryAfterMs
+          : baseDelayMs * 2 ** attempt + Math.random() * baseDelayMs;
+      pendingRetryAfterMs = null; // consume, don't persist across attempts
       await sleep(delay);
     }
   }

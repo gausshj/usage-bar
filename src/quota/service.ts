@@ -121,7 +121,11 @@ export class QuotaService {
         this.refreshBudgetMs,
         id,
       );
-      this.cache.set(id, { snapshot, expiresAt: Date.now() + this.cacheTtlMs });
+      // Only cache successful/usable results (PRD §10). Caching errors would
+      // suppress retries for the full TTL and keep showing a failure.
+      if (snapshot.status === 'ready' || snapshot.status === 'stale') {
+        this.cache.set(id, { snapshot, expiresAt: Date.now() + this.cacheTtlMs });
+      }
       if (snapshot.status === 'ready') {
         this.lastKnownGood.set(id, snapshot);
       }
