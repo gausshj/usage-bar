@@ -277,6 +277,11 @@ function BucketBar({ bucket }: { bucket: QuotaBucket }) {
           </span>
         )}
       </div>
+
+      {/* Optional breakdown of what's inside the window (e.g. GLM MCP tools). */}
+      {bucket.details && (
+        <div className="mt-1 text-[11px] text-slate-400">{bucket.details}</div>
+      )}
     </div>
   );
 }

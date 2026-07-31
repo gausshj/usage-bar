@@ -73,6 +73,11 @@ export interface QuotaBucket {
   windowSeconds: number | null;
   /** ISO 8601 reset time. null when there is no reset (balances). */
   resetsAt: string | null;
+  /**
+   * Optional human-readable breakdown of what's inside this window, e.g. GLM's
+   * MCP tools split "search-prime=26, web-reader=7". Rendered verbatim.
+   */
+  details?: string;
 }
 
 /**

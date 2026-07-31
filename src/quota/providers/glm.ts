@@ -203,6 +203,10 @@ function limitToBucket(limit: GlmLimit): QuotaBucket | null {
     used: typeof limit.currentValue === 'number' ? limit.currentValue : null,
     limit: typeof limit.usage === 'number' ? limit.usage : null,
     remaining: typeof limit.remaining === 'number' ? limit.remaining : null,
+    // MCP tools breakdown (联网搜索/网页读取/开源仓库) when present (#37).
+    details: limit.usageDetails?.length
+      ? limit.usageDetails.map((d) => `${d.modelCode}=${d.usage}`).join(', ')
+      : undefined,
     usedPercent,
     windowSeconds: null,
     resetsAt: limit.nextResetTime ? new Date(limit.nextResetTime).toISOString() : null,
@@ -210,15 +214,16 @@ function limitToBucket(limit: GlmLimit): QuotaBucket | null {
 }
 
 function describeGlmWindow(limit: GlmLimit): string {
-  // TIME_LIMIT is the MCP tool-call volume window, NOT a monthly token quota
-  // (verified against the official glm-plan-usage plugin + a real account, #37).
-  // The window period is still shown via its unit/number, but the label names
-  // the metric honestly.
+  // TIME_LIMIT is the MCP tools window (联网搜索 search-prime / 网页读取 web-reader /
+  // 开源仓库 zread) — i.e. the internet/tool-call monthly quota, NOT a monthly
+  // token quota. Verified against the official docs + glm-plan-usage plugin +
+  // a real account (#37). Labeled "MCP tools" to match GLM's own naming, with
+  // the period shown via its unit/number.
   if (limit.type === 'TIME_LIMIT') {
     const period = limit.unit != null && limit.number != null
       ? GLM_UNIT_MINUTES_LABEL(limit.unit)
       : null;
-    return period ? `MCP calls (${period})` : 'MCP calls';
+    return period ? `MCP tools (${period})` : 'MCP tools';
   }
   const typeLabel = limit.type === 'TOKENS_LIMIT' ? 'tokens' : limit.type;
   if (limit.unit != null && limit.number != null) {

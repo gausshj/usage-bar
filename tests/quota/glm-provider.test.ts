@@ -42,9 +42,10 @@ describe('GlmProvider', () => {
     expect(snap.buckets[0].usedPercent).toBe(42);
     expect(snap.buckets[0].resetsAt).toContain('2026');
 
-    // TIME_LIMIT is MCP call volume (monthly), NOT a monthly token quota (#37).
+    // TIME_LIMIT is MCP tools usage (联网搜索/网页读取/开源仓库) — a monthly
+    // internet/tool-call quota, NOT a monthly token quota (#37).
     const mcp = snap.buckets[1];
-    expect(mcp.label).toBe('MCP calls (month)');
+    expect(mcp.label).toBe('MCP tools (month)');
     expect(mcp.metric).toBe('requests');
     expect(mcp.used).toBe(5);
     expect(mcp.limit).toBe(4000);
