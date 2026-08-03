@@ -6,6 +6,7 @@ import type {
   QuotaProviderAdapter,
   QuotaSnapshot,
 } from '../../src/quota/contract.js';
+import * as configModule from '../../src/quota/config.js';
 import { QuotaService } from '../../src/quota/service.js';
 
 // Integration test: an invalid GLM region must NOT crash the whole service.
@@ -83,6 +84,21 @@ describe('service with invalid GLM region (integration)', () => {
     expect(codexFetch).toHaveBeenCalledOnce();
     expect(glmFetch).toHaveBeenCalledOnce();
     expect(kimiFetch).toHaveBeenCalledOnce();
+    expect(networkFetch).not.toHaveBeenCalled();
+  });
+
+  it('rethrows unexpected config parser errors instead of masking them', async () => {
+    delete process.env.GLM_CREDENTIAL_ID;
+    delete process.env.KIMI_CREDENTIAL_ID;
+    const unexpected = new Error('unexpected config parser failure');
+    const networkFetch = vi.fn();
+    vi.stubGlobal('fetch', networkFetch);
+    vi.spyOn(configModule, 'parseProviderConfigs').mockImplementationOnce(() => {
+      throw unexpected;
+    });
+
+    const { buildDefaultAdapters } = await import('../../src/quota/service.js');
+    await expect(buildDefaultAdapters()).rejects.toBe(unexpected);
     expect(networkFetch).not.toHaveBeenCalled();
   });
 });
