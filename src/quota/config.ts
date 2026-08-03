@@ -19,7 +19,7 @@ export class ConfigError extends Error {
   }
 }
 
-const VALID_REGIONS: readonly GlmRegion[] = ['bigmodel', 'zai'];
+const VALID_REGIONS = new Set<GlmRegion>(['bigmodel', 'zai']);
 
 export interface ProviderConfigs {
   glm: {
@@ -67,7 +67,7 @@ export function parseProviderConfigs(
  */
 function parseGlmRegion(raw: string | undefined): GlmRegion {
   if (raw === undefined || raw === '') return 'bigmodel';
-  if (!VALID_REGIONS.includes(raw as GlmRegion)) {
+  if (!VALID_REGIONS.has(raw as GlmRegion)) {
     throw new ConfigError(
       `Invalid GLM_CODING_PLAN_REGION "${raw}". Must be "bigmodel" or "zai".`,
     );
