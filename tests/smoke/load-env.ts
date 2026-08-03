@@ -5,7 +5,7 @@ const strictLogger = {
   info: () => undefined,
   error: (...args: unknown[]): never => {
     const cause = args.find((arg): arg is Error => arg instanceof Error);
-    throw cause ?? new Error(String(args[0] ?? 'Failed to load smoke environment'));
+    throw cause ?? new Error('Failed to load smoke environment');
   },
 };
 
