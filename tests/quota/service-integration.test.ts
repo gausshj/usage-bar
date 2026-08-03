@@ -1,4 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { PROVIDER_ORDER } from '../../src/quota/contract.js';
+import type {
+  ProviderId,
+  QuotaProviderAdapter,
+  QuotaSnapshot,
+} from '../../src/quota/contract.js';
+import { QuotaService } from '../../src/quota/service.js';
 
 // Integration test: an invalid GLM region must NOT crash the whole service.
 // Only GLM should report an error; Codex and Kimi must still refresh.
@@ -6,52 +14,75 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 const ORIGINAL_ENV = { ...process.env };
 
+function readyAdapter(providerId: ProviderId): QuotaProviderAdapter {
+  return {
+    providerId,
+    displayName: providerId,
+    isConfigured: () => true,
+    async fetch(): Promise<QuotaSnapshot> {
+      const now = new Date().toISOString();
+      return {
+        providerId,
+        status: 'ready',
+        fetchedAt: now,
+        observedAt: now,
+        source: {
+          kind: providerId === 'codex_chatgpt' ? 'official_protocol' : 'official_compatibility',
+          name: 'integration-test',
+          version: null,
+          isFallback: false,
+        },
+        plan: { name: null, accountLabel: null },
+        buckets: [],
+      };
+    },
+  };
+}
+
 describe('service with invalid GLM region (integration)', () => {
   afterEach(() => {
     process.env = { ...ORIGINAL_ENV };
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it('GLM returns invalid_config error while Codex/Kimi remain unaffected', async () => {
-    process.env.GLM_CODING_PLAN_REGION = 'invalid_region';
+  it('readAll returns a provider-scoped invalid_config error without network I/O', async () => {
+    const invalidRegion = 'secret-token-accidentally-pasted-here';
+    process.env.GLM_CODING_PLAN_REGION = invalidRegion;
     // Provide a dummy token so GLM doesn't short-circuit to unconfigured.
     process.env.GLM_CODING_PLAN_TOKEN = 'dummy';
+    delete process.env.GLM_CREDENTIAL_ID;
+    delete process.env.KIMI_CREDENTIAL_ID;
+    const networkFetch = vi.fn();
+    vi.stubGlobal('fetch', networkFetch);
 
     const { buildDefaultAdapters } = await import('../../src/quota/service.js');
     const adapters = await buildDefaultAdapters();
+    const glmFetch = vi.spyOn(adapters.glm_coding_plan, 'fetch');
 
-    // All three adapters must exist — the factory must not have thrown.
-    expect(adapters.codex_chatgpt).toBeDefined();
-    expect(adapters.glm_coding_plan).toBeDefined();
-    expect(adapters.kimi_code).toBeDefined();
+    // Keep the integration deterministic while still exercising the real
+    // default factory and its provider-scoped GLM config-error adapter.
+    adapters.codex_chatgpt = readyAdapter('codex_chatgpt');
+    adapters.kimi_code = readyAdapter('kimi_code');
+    const codexFetch = vi.spyOn(adapters.codex_chatgpt, 'fetch');
+    const kimiFetch = vi.spyOn(adapters.kimi_code, 'fetch');
 
-    // GLM adapter must report the config error (not crash, not unconfigured).
-    const glmSnap = await adapters.glm_coding_plan.fetch(null);
-    expect(glmSnap.providerId).toBe('glm_coding_plan');
-    expect(glmSnap.status).toBe('error');
-    expect(glmSnap.error?.code).toBe('invalid_config');
-  });
-
-  it('GLM with valid region builds normally', async () => {
-    process.env.GLM_CODING_PLAN_REGION = 'bigmodel';
-    process.env.GLM_CODING_PLAN_TOKEN = 'dummy';
-
-    const { buildDefaultAdapters } = await import('../../src/quota/service.js');
-    const adapters = await buildDefaultAdapters();
-
-    const glmSnap = await adapters.glm_coding_plan.fetch(null);
-    // With a dummy token, GLM will try a real request and fail — but the
-    // adapter itself is the real GlmProvider (not an error stub), so the
-    // status should be a network/auth error, not invalid_config.
-    expect(glmSnap.error?.code).not.toBe('invalid_config');
-  });
-
-  it('GLM with zai region builds normally', async () => {
-    process.env.GLM_CODING_PLAN_REGION = 'zai';
-    process.env.GLM_CODING_PLAN_TOKEN = 'dummy';
-
-    const { buildDefaultAdapters } = await import('../../src/quota/service.js');
-    const adapters = await buildDefaultAdapters();
-    const glmSnap = await adapters.glm_coding_plan.fetch(null);
-    expect(glmSnap.error?.code).not.toBe('invalid_config');
+    const snapshots = await new QuotaService({ adapters }).readAll();
+    expect(snapshots.map((snapshot) => snapshot.providerId)).toEqual(PROVIDER_ORDER);
+    expect(snapshots.map((snapshot) => snapshot.status)).toEqual([
+      'ready',
+      'error',
+      'ready',
+    ]);
+    expect(snapshots[1].error).toEqual({
+      code: 'invalid_config',
+      safeMessage: 'Invalid GLM_CODING_PLAN_REGION. Must be "bigmodel" or "zai".',
+      retryable: false,
+    });
+    expect(snapshots[1].error?.safeMessage).not.toContain(invalidRegion);
+    expect(codexFetch).toHaveBeenCalledOnce();
+    expect(glmFetch).toHaveBeenCalledOnce();
+    expect(kimiFetch).toHaveBeenCalledOnce();
+    expect(networkFetch).not.toHaveBeenCalled();
   });
 });

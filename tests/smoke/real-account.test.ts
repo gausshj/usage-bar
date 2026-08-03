@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import type { QuotaSnapshot } from '../../src/quota/contract.js';
+import { loadSmokeEnv } from './load-env.js';
 
 // Only run when explicitly opted in.
 const SMOKE = process.env.SMOKE === '1' || process.env.SMOKE === 'true';
@@ -26,14 +27,17 @@ const run = SMOKE ? describe : describe.skip;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..', '..');
 
-// Load .env.local into process.env (no secrets printed).
-// Uses the shared dotenv-compatible parser (review P2).
-try {
-  const envFile = readFileSync(join(root, '.env.local'), 'utf8');
-  const { parseDotenv } = await import('../../src/quota/dotenv-parse.js');
-  parseDotenv(envFile, process.env);
-} catch {
-  // no .env.local
+// Loading real credentials is opt-in together with the smoke suite. Ordinary
+// `npm test` must not read or inject .env.local at module evaluation time.
+if (SMOKE) {
+  // Use Next's own dotenv + expansion implementation, so smoke and the
+  // application agree exactly (review P2).
+  try {
+    const envFile = readFileSync(join(root, '.env.local'), 'utf8');
+    loadSmokeEnv(envFile, root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
 }
 
 const startedAt = new Date().toISOString();

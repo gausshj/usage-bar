@@ -69,7 +69,7 @@ function parseGlmRegion(raw: string | undefined): GlmRegion {
   if (raw === undefined || raw === '') return 'bigmodel';
   if (!VALID_REGIONS.has(raw as GlmRegion)) {
     throw new ConfigError(
-      `Invalid GLM_CODING_PLAN_REGION "${raw}". Must be "bigmodel" or "zai".`,
+      'Invalid GLM_CODING_PLAN_REGION. Must be "bigmodel" or "zai".',
     );
   }
   return raw as GlmRegion;

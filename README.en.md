@@ -79,7 +79,7 @@ GLM_CODING_PLAN_TOKEN=your-global-site-token
 GLM_CODING_PLAN_REGION=zai
 ```
 
-> ⚠️ `GLM_CODING_PLAN_REGION` must be exactly `bigmodel` or `zai`. Any other value causes a startup error (no silent fallback to the default region).
+> ⚠️ `GLM_CODING_PLAN_REGION` must be exactly `bigmodel` or `zai`. Any other value makes the GLM card report a configuration error (with no silent fallback and no impact on Codex/Kimi).
 
 Restart `npm run dev`. The GLM card then shows real data (5-hour token window + monthly MCP tool-call quota).
 

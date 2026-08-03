@@ -24,6 +24,19 @@ describe('parseProviderConfigs', () => {
     expect(() => parseProviderConfigs({ GLM_CODING_PLAN_REGION: 'ZAI' })).toThrow(ConfigError);
   });
 
+  it('does not echo an invalid region value in the safe error message', () => {
+    const sentinel = 'secret-token-accidentally-pasted-here';
+    expect(() =>
+      parseProviderConfigs({ GLM_CODING_PLAN_REGION: sentinel }),
+    ).toThrow('Invalid GLM_CODING_PLAN_REGION. Must be "bigmodel" or "zai".');
+
+    try {
+      parseProviderConfigs({ GLM_CODING_PLAN_REGION: sentinel });
+    } catch (error) {
+      expect((error as Error).message).not.toContain(sentinel);
+    }
+  });
+
   it('passes custom base URLs through to the config', () => {
     const cfg = parseProviderConfigs({
       GLM_CODING_PLAN_BASE_URL: 'https://custom.glm.example.com',

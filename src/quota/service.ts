@@ -197,12 +197,12 @@ export async function buildDefaultAdapters(): Promise<Record<ProviderId, QuotaPr
 
   // Use the shared config parser so smoke tests and the service always agree
   // on endpoints and region validation (review P1-2).
-  const { parseProviderConfigs } = await import('./config.js');
+  const { ConfigError, parseProviderConfigs } = await import('./config.js');
 
   // Build GLM adapter separately — an invalid region (ConfigError from
   // parseProviderConfigs) must only affect GLM, never crash the whole factory
   // and take down Codex/Kimi (P1). Codex/Kimi read env directly.
-  let glmAdapter;
+  let glmAdapter: QuotaProviderAdapter;
   try {
     const cfg = parseProviderConfigs();
     glmAdapter = new GlmProvider({
@@ -213,10 +213,12 @@ export async function buildDefaultAdapters(): Promise<Record<ProviderId, QuotaPr
       baseUrl: cfg.glm.baseUrl,
     });
   } catch (e) {
-    const safeMsg = e instanceof Error ? e.message : String(e);
+    // Only expected configuration failures are provider-scoped. Unexpected
+    // programmer/runtime errors must still surface instead of being mislabeled.
+    if (!(e instanceof ConfigError)) throw e;
     glmAdapter = makeErrorAdapter('glm_coding_plan', 'GLM Coding Plan', {
       code: 'invalid_config',
-      safeMessage: safeMsg,
+      safeMessage: e.message,
     });
   }
 
@@ -232,7 +234,7 @@ export async function buildDefaultAdapters(): Promise<Record<ProviderId, QuotaPr
   };
 }
 
-/** A minimal adapter that always returns a single error snapshot (P1). */
+/** A terminal config-error adapter that performs no network I/O (P1). */
 function makeErrorAdapter(
   providerId: ProviderId,
   displayName: string,
@@ -241,7 +243,9 @@ function makeErrorAdapter(
   return {
     providerId,
     displayName,
-    isConfigured: () => false,
+    // QuotaService short-circuits false to a generic `unconfigured` snapshot.
+    // Return true so fetch() can preserve the specific invalid_config error.
+    isConfigured: () => true,
     async fetch() {
       return {
         providerId,
