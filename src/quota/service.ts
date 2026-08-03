@@ -195,21 +195,69 @@ export async function buildDefaultAdapters(): Promise<Record<ProviderId, QuotaPr
     resolver = await buildSecureResolver(credentialsMod);
   }
 
-  return {
-    codex_chatgpt: new CodexProvider(),
-    glm_coding_plan: new GlmProvider({
-      token: process.env.GLM_CODING_PLAN_TOKEN || process.env.GLM_QUOTA_TOKEN || '',
+  // Use the shared config parser so smoke tests and the service always agree
+  // on endpoints and region validation (review P1-2).
+  const { ConfigError, parseProviderConfigs } = await import('./config.js');
+
+  // Build GLM adapter separately — an invalid region (ConfigError from
+  // parseProviderConfigs) must only affect GLM, never crash the whole factory
+  // and take down Codex/Kimi (P1). Codex/Kimi read env directly.
+  let glmAdapter: QuotaProviderAdapter;
+  try {
+    const cfg = parseProviderConfigs();
+    glmAdapter = new GlmProvider({
+      token: cfg.glm.token,
       credentialId: glmCredId,
       resolver,
-      region: process.env.GLM_CODING_PLAN_REGION === 'zai' ? 'zai' : 'bigmodel',
-      baseUrl: process.env.GLM_CODING_PLAN_BASE_URL,
-    }),
+      region: cfg.glm.region,
+      baseUrl: cfg.glm.baseUrl,
+    });
+  } catch (e) {
+    // Only expected configuration failures are provider-scoped. Unexpected
+    // programmer/runtime errors must still surface instead of being mislabeled.
+    if (!(e instanceof ConfigError)) throw e;
+    glmAdapter = makeErrorAdapter('glm_coding_plan', 'GLM Coding Plan', {
+      code: 'invalid_config',
+      safeMessage: e.message,
+    });
+  }
+
+  return {
+    codex_chatgpt: new CodexProvider(),
+    glm_coding_plan: glmAdapter,
     kimi_code: new KimiProvider({
       accessToken: process.env.KIMI_CODE_ACCESS_TOKEN || undefined,
       credentialId: kimiCredId,
       resolver,
-      baseUrl: process.env.KIMI_CODE_BASE_URL,
+      baseUrl: process.env.KIMI_CODE_BASE_URL || undefined,
     }),
+  };
+}
+
+/** A terminal config-error adapter that performs no network I/O (P1). */
+function makeErrorAdapter(
+  providerId: ProviderId,
+  displayName: string,
+  error: { code: string; safeMessage: string },
+): QuotaProviderAdapter {
+  return {
+    providerId,
+    displayName,
+    // QuotaService short-circuits false to a generic `unconfigured` snapshot.
+    // Return true so fetch() can preserve the specific invalid_config error.
+    isConfigured: () => true,
+    async fetch() {
+      return {
+        providerId,
+        status: 'error' as const,
+        fetchedAt: new Date().toISOString(),
+        observedAt: null,
+        source: { kind: 'official_compatibility' as const, name: displayName, version: null, isFallback: false },
+        plan: { name: null, accountLabel: null },
+        buckets: [],
+        error: { ...error, retryable: false },
+      };
+    },
   };
 }
 

@@ -2,11 +2,13 @@
 
 > Coding Plan 配额看板 — Codex / GLM Coding Plan / Kimi Code 的本地用量监控
 
+[English](./README.en.md) | 简体中文
+
 ## 简介
 
 Usage-Bar 是一个本地优先的 Web Dashboard，帮助同时订阅多个 AI 编程服务的开发者，在一个页面查看当前配额、剩余额度、重置时间和用量明细。
 
-v1 首发支持三个产品：
+v1 支持三个产品：
 
 1. **Codex**（ChatGPT / Codex 账户配额）
 2. **GLM Coding Plan**
@@ -16,18 +18,20 @@ v1 首发支持三个产品：
 
 ## 特性
 
-- 📊 **三卡配额看板** — 固定显示 Codex / GLM / Kimi 三张卡片，含已用/剩余百分比、重置倒计时
+- 📊 **三卡配额看板** — 固定显示 Codex / GLM / Kimi 三张卡片，含已用/剩余百分比、重置倒计时、用量明细
 - 🔌 **多数据源等级** — 区分官方协议（Codex App Server）、官方兼容（GLM/Kimi）、本地估算（降级）
 - 🧯 **容错降级** — 单个供应商失败不影响其他家；失败时保留上次有效数据并标记 Stale
-- 🔒 **本地优先** — 默认仅监听 `127.0.0.1`，凭据不经过数据库、不外传
+- 🔒 **本地优先** — 默认仅监听 `127.0.0.1`。凭据不会发送给 Usage-Bar 自有后端或遥测，只会发送到你配置的 provider endpoint
 - 📈 **Codex Activity (Beta)** — 从本地 session 文件估算近 7 天 token 用量
 
 ## 快速开始
 
 > ⚠️ 项目处于 v1 开发阶段（Local Alpha）
 
+### 零配置直接跑
+
 ```bash
-git clone git@github.com:gausshj/usage-bar.git
+git clone https://github.com/gausshj/usage-bar.git
 cd usage-bar
 npm install
 npm run dev          # 默认绑定 127.0.0.1:3000
@@ -35,35 +39,133 @@ npm run dev          # 默认绑定 127.0.0.1:3000
 
 打开 `http://127.0.0.1:3000`。
 
-## 凭据配置
+**此时不做任何配置，页面也能打开**，会看到三张卡片分别显示各自状态：
+- 如果你本地装过对应的 agent CLI 且已登录，卡片会显示真实配额数据
+- 如果没有，卡片显示"未配置"提示（不影响其他卡片）
+- **注意**：GLM 不一样——它没有本地登录态可读，必须显式配置 token（见下文）
 
-凭据通过环境变量注入（受 `.gitignore` 保护），在项目根目录创建 `.env.local`：
+## 让三家显示真实数据
+
+Usage-Bar 的原理是**读取你本地 agent CLI 的登录态/凭据**。所以激活方式因 provider 而异——Codex 和 Kimi 通常不用配（CLI 已登录过就行），**GLM 必须显式配置 token**。
+
+### Codex —— 无需配置
+
+只要你在本机装过 Codex 并登录过（`~/.codex/` 存在），Usage-Bar 会自动通过 Codex App Server 读取配额，**无需任何配置**。
 
 ```bash
-# 智谱 GLM Coding Plan token（裸 token，非 Bearer）
-GLM_CODING_PLAN_TOKEN=你的-glm-coding-plan-token
-GLM_CODING_PLAN_REGION=bigmodel   # 可选: bigmodel (默认, open.bigmodel.cn) | zai (api.z.ai)
-
-# Kimi Code（可选；不配则自动读取 ~/.kimi-code/credentials/kimi-code.json）
-KIMI_CODE_ACCESS_TOKEN=你的-kimi-code-access-token
+# 验证：登录态是否存在
+ls ~/.codex/auth.json   # 存在即可
 ```
 
-| Provider | 数据来源 | 凭据 | 数据源等级 |
-|---|---|---|---|
-| **Codex** | Codex App Server（`account/rateLimits/read`） | 无需（复用本地 Codex 登录态） | Official Protocol |
-| **GLM** | `open.bigmodel.cn/api/monitor/usage/quota/limit` | `GLM_CODING_PLAN_TOKEN` | Official Compatibility |
-| **Kimi** | `api.kimi.com/coding/v1/usages` | kimi-cli 登录态 / `KIMI_CODE_ACCESS_TOKEN` | Official Compatibility |
+> Codex 在 App Server 不可用时，自动降级为解析本地 session 文件（卡片标注 Local Estimate）。
 
-- Codex 在 App Server 不可用时，降级为解析本地 `~/.codex/sessions` 文件（标注 Local Estimate）。
-- 未配置或失败的供应商显示对应状态卡片（unconfigured / stale / error），不影响其他卡片。
-- **注意**：Kimi Code 用量 ≠ Moonshot Open Platform 余额，二者不可混用。
+### GLM Coding Plan —— 需要配置 token
+
+GLM 需要你在对应区域的平台创建一个 Coding Plan 的 API key。**token 必须和 region 成对配置**——中国站 token 不能发给全球站，反之亦然。
+
+**中国站（bigmodel，默认）：**
+1. 登录 [bigmodel.cn](https://bigmodel.cn/) → 个人编程套餐 → 套餐概览 → 新建 API Key
+2. `.env.local`：
+```bash
+GLM_CODING_PLAN_TOKEN=你的中国站-token
+GLM_CODING_PLAN_REGION=bigmodel   # 默认值，可省略
+```
+
+**全球站（zai）：**
+1. 登录 [Z.AI 开发者控制台](https://z.ai/) 获取对应 Coding Plan token
+2. `.env.local`：
+```bash
+GLM_CODING_PLAN_TOKEN=你的全球站-token
+GLM_CODING_PLAN_REGION=zai
+```
+
+> ⚠️ `GLM_CODING_PLAN_REGION` 只能是 `bigmodel` 或 `zai`。其他值会让 GLM 卡片显示配置错误（不会静默回落到默认区域，也不影响 Codex/Kimi）。
+
+重启 `npm run dev` 后，GLM 卡片即显示真实数据（5 小时 token 窗口 + MCP 工具月度调用量）。
+
+### Kimi Code —— 通常无需配置
+
+只要你在本机装过 Kimi CLI 并登录过，Usage-Bar 会自动读取 `~/.kimi-code/credentials/` 的登录态，并在 token 过期时自动刷新（Kimi token 15 分钟过期，自动 renew），**无需配置**。
+
+```bash
+# 如果没登录过，先登录：
+kimi login
+```
+
+> ⚠️ **KIMI_CODE_ACCESS_TOKEN 不会自动续期**。自动刷新（refresh）只有当你使用 CLI 的 credential 文件路径时才有效。如果你显式设置了 `KIMI_CODE_ACCESS_TOKEN`，它过期后不会再自动更新，需要你手动换新的。
+> ```bash
+> # 仅在 credential 文件路径不可用时的备选（不自动续期）：
+> KIMI_CODE_ACCESS_TOKEN=你的-kimi-code-access-token
+> ```
+
+### 配置一览
+
+| Provider | 需要配置吗 | 怎么做 |
+|---|---|---|
+| **Codex** | ❌ 不用 | 登录过 Codex 即可（自动读 App Server） |
+| **GLM** | ✅ 需要 | `.env.local` 设 `GLM_CODING_PLAN_TOKEN` |
+| **Kimi** | ❌ 通常不用 | `kimi login` 即可（自动读 + 自动刷新） |
+
+**注意**：Kimi Code 用量 ≠ Moonshot Open Platform 余额，二者不可混用。
+
+## 高级配置（可选）
+
+<details>
+<summary>展开：自定义端点等</summary>
+
+自定义端点（一般不需要）：
+
+```bash
+GLM_CODING_PLAN_BASE_URL=...    # GLM 自定义 base URL
+KIMI_CODE_BASE_URL=...          # Kimi 自定义 base URL
+CODEX_BINARY_PATH=...           # 指定 codex 二进制路径
+```
+
+> ⚠️ **注意**：如果你配置了自定义 base URL，你的 token 会被发送到那个 URL。
+> 只有在你信任该 endpoint 时才设置它。
+
+</details>
+
+## 常见问题
+
+<details>
+<summary><b>GLM 卡片显示"未配置"，但我设了 token</b></summary>
+
+确认：
+- 变量名是 `GLM_CODING_PLAN_TOKEN`（不是 `GLM_QUOTA_TOKEN`，旧的已废弃但仍兼容）
+- `.env.local` 在项目根目录，且改了之后**重启了** `npm run dev`
+- token 是 Coding Plan 的 key，不是普通按量付费的 key
+</details>
+
+<details>
+<summary><b>Kimi 卡片显示 token_expired</b></summary>
+
+取决于你的配置方式：
+
+- **使用 `KIMI_CODE_ACCESS_TOKEN`**：该环境变量**不会自动续期**。替换为新 token，或删除该环境变量后重启 Usage-Bar，使其回到 CLI credential 模式（支持自动刷新）。
+- **使用 CLI credential 文件**（默认）：运行 `kimi login` 重新登录即可。
+</details>
+
+<details>
+<summary><b>Codex 显示 Local Estimate 而非官方数据</b></summary>
+
+说明 Codex App Server 没能启动。确认本机 codex 二进制可用（装了 Codex 桌面版或 VS Code 插件）。Local Estimate 是降级估算，数字仅供参考。
+</details>
+
+## 验证真实数据（smoke test）
+
+```bash
+npm run smoke
+```
+
+`npm run smoke` 会验证 Codex、`GLM_CODING_PLAN_REGION` 当前选择的 GLM 区域和 Kimi。报告仅保存在本地并被 gitignore，只记录允许字段，不包含 token、账号、safeMessage 或原始响应。验证请求仍会将凭据发送到相应 provider 的 API/OAuth endpoint。
 
 ## 技术栈
 
 - **框架**: Next.js 15（App Router，前后端一体）
 - **前端**: React 19 + TypeScript + Tailwind CSS
 - **后端**: Next.js Route Handlers（`/api/v1/quota`）
-- **测试**: Vitest（86 个单元测试）
+- **测试**: Vitest 单元/集成测试 + opt-in 真实账户 smoke test
 - **校验**: ESLint + tsc
 
 ## 项目结构
@@ -74,9 +176,13 @@ src/
 │   ├── contract.ts      统一数据契约（ProviderStatus / QuotaSnapshot …）
 │   ├── providers/       codex / glm / kimi 各自的 adapter
 │   ├── service.ts       聚合：缓存 + singleflight + stale 降级
+│   ├── credentials.ts   credentialId 解析 + scope 校验
+│   ├── schemas.ts       zod runtime schema 校验
 │   └── http.ts          共享 HTTP helper（timeout / retry / redaction）
-├── usage/           Codex Activity（Beta）本地 token 明细
 └── app/             页面 + API 路由
+tests/
+├── quota/           各 provider 单元测试
+└── smoke/           真实账户 smoke test（opt-in）
 ```
 
 ## 贡献流程
