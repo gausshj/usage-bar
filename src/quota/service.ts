@@ -195,20 +195,25 @@ export async function buildDefaultAdapters(): Promise<Record<ProviderId, QuotaPr
     resolver = await buildSecureResolver(credentialsMod);
   }
 
+  // Use the shared config parser so smoke tests and the service always agree
+  // on endpoints and region validation (review P1-2).
+  const { parseProviderConfigs } = await import('./config.js');
+  const cfg = parseProviderConfigs();
+
   return {
     codex_chatgpt: new CodexProvider(),
     glm_coding_plan: new GlmProvider({
-      token: process.env.GLM_CODING_PLAN_TOKEN || process.env.GLM_QUOTA_TOKEN || '',
+      token: cfg.glm.token,
       credentialId: glmCredId,
       resolver,
-      region: process.env.GLM_CODING_PLAN_REGION === 'zai' ? 'zai' : 'bigmodel',
-      baseUrl: process.env.GLM_CODING_PLAN_BASE_URL,
+      region: cfg.glm.region,
+      baseUrl: cfg.glm.baseUrl,
     }),
     kimi_code: new KimiProvider({
-      accessToken: process.env.KIMI_CODE_ACCESS_TOKEN || undefined,
+      accessToken: cfg.kimi.accessToken,
       credentialId: kimiCredId,
       resolver,
-      baseUrl: process.env.KIMI_CODE_BASE_URL,
+      baseUrl: cfg.kimi.baseUrl,
     }),
   };
 }

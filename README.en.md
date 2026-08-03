@@ -61,18 +61,27 @@ ls ~/.codex/auth.json   # present = good
 
 ### GLM Coding Plan — requires a token
 
-GLM needs an API key from the Zhipu open platform:
+GLM needs an API key from the platform matching your region. **The token and region must be paired** — a China-site token must not be sent to the global site, and vice versa.
 
+**China site (bigmodel, default):**
 1. Log into [bigmodel.cn](https://bigmodel.cn/) → 个人编程套餐 → 套餐概览 → create an API Key.
-2. Create `.env.local` in the project root:
-
+2. `.env.local`:
 ```bash
-GLM_CODING_PLAN_TOKEN=your-glm-coding-plan-token
-# Optional: region, defaults to bigmodel (open.bigmodel.cn)
-GLM_CODING_PLAN_REGION=bigmodel   # or zai (api.z.ai, global)
+GLM_CODING_PLAN_TOKEN=your-china-site-token
+GLM_CODING_PLAN_REGION=bigmodel   # default, can be omitted
 ```
 
-3. Restart `npm run dev`. The GLM card then shows real data (5-hour token window + monthly MCP tool-call quota).
+**Global site (zai):**
+1. Get the corresponding Coding Plan token from the [Z.AI developer console](https://z.ai/).
+2. `.env.local`:
+```bash
+GLM_CODING_PLAN_TOKEN=your-global-site-token
+GLM_CODING_PLAN_REGION=zai
+```
+
+> ⚠️ `GLM_CODING_PLAN_REGION` must be exactly `bigmodel` or `zai`. Any other value causes a startup error (no silent fallback to the default region).
+
+Restart `npm run dev`. The GLM card then shows real data (5-hour token window + monthly MCP tool-call quota).
 
 ### Kimi Code — usually no config
 
@@ -131,7 +140,10 @@ Check:
 <details>
 <summary><b>Kimi shows token_expired</b></summary>
 
-Normally Usage-Bar auto-refreshes (tokens last 15 minutes and auto-renew). If it keeps failing, run `kimi login` again.
+Depends on your configuration:
+
+- **Using `KIMI_CODE_ACCESS_TOKEN`**: this env var **does not auto-renew**. Replace it with a fresh token, or remove the env var and restart Usage-Bar to fall back to the CLI credential mode (which supports auto-refresh).
+- **Using the CLI credential file** (default): run `kimi login` to re-authenticate.
 </details>
 
 <details>
@@ -142,20 +154,18 @@ The Codex App Server failed to start. Make sure the codex binary is available (C
 
 ## Verify real connections (smoke test)
 
-To confirm all three real-account connections work:
-
 ```bash
 npm run smoke
 ```
 
-It verifies Codex / GLM (both regions) / Kimi against real credentials and writes a **redacted** report to `docs/smoke-test-report.md`. It never uploads or records any token, account, or raw response.
+`npm run smoke` verifies Codex, the GLM region selected by `GLM_CODING_PLAN_REGION`, and Kimi. The report is saved locally and git-ignored; it records only allowlisted fields — no tokens, accounts, safeMessages, or raw responses. Verification requests still send credentials to the respective provider's API/OAuth endpoint.
 
 ## Tech stack
 
 - **Framework**: Next.js 15 (App Router, full-stack in one process)
 - **Frontend**: React 19 + TypeScript + Tailwind CSS
 - **Backend**: Next.js Route Handlers (`/api/v1/quota`)
-- **Tests**: Vitest (123 unit tests + opt-in smoke test)
+- **Tests**: Vitest unit/integration tests + opt-in real-account smoke test
 - **Checks**: ESLint + tsc
 
 ## Project structure

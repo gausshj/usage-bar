@@ -74,28 +74,36 @@ run('real-account smoke test', () => {
     expect(snap.source.kind).toBe('official_protocol');
   }, 20000);
 
-  it('glm via monitor API (configured region only)', async () => {
-    const token = process.env.GLM_CODING_PLAN_TOKEN || process.env.GLM_QUOTA_TOKEN;
-    if (!token) {
+  it('glm via monitor API (configured region only, shared config)', async () => {
+    const { parseProviderConfigs } = await import('../../src/quota/config.js');
+    const cfg = parseProviderConfigs();
+    if (!cfg.glm.token) {
       // No token → must NOT pass; mark as skipped expectation explicitly.
-      expect(token).toBeTruthy();
+      expect(cfg.glm.token).toBeTruthy();
       return;
     }
-    // Test ONLY the configured region — never send the same token to both the
-    // CN and global domains (#1). Default to bigmodel if unset.
-    const region = process.env.GLM_CODING_PLAN_REGION === 'zai' ? 'zai' : 'bigmodel';
+    // Use the shared config so smoke tests the SAME endpoint/region/baseUrl as
+    // the real application (review P1-2). Region is already validated here —
+    // an invalid value would have thrown ConfigError before this point.
     const { GlmProvider } = await import('../../src/quota/providers/glm.js');
-    const snap = await new GlmProvider({ token, region }).fetch(null);
-    row(snap, `glm_coding_plan (${region})`, 'monitor API');
-    // Must be ready AND via official_compatibility — not unconfigured/error (#1).
+    const snap = await new GlmProvider({
+      token: cfg.glm.token,
+      region: cfg.glm.region,
+      baseUrl: cfg.glm.baseUrl,
+    }).fetch(null);
+    row(snap, `glm_coding_plan (${cfg.glm.region})`, 'monitor API');
+    // Must be ready AND via official_compatibility — not unconfigured/error.
     expect(snap.status).toBe('ready');
     expect(snap.source.kind).toBe('official_compatibility');
   }, 15000);
 
-  it('kimi via OAuth refresh + usages', async () => {
+  it('kimi via OAuth refresh + usages (shared config)', async () => {
+    const { parseProviderConfigs } = await import('../../src/quota/config.js');
+    const cfg = parseProviderConfigs();
     const { KimiProvider } = await import('../../src/quota/providers/kimi.js');
     const p = new KimiProvider({
-      accessToken: process.env.KIMI_CODE_ACCESS_TOKEN || undefined,
+      accessToken: cfg.kimi.accessToken,
+      baseUrl: cfg.kimi.baseUrl,
       credentialsPath: join(homedir(), '.kimi-code/credentials/kimi-code.json'),
     });
     const snap = await p.fetch(null);

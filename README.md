@@ -61,18 +61,27 @@ ls ~/.codex/auth.json   # 存在即可
 
 ### GLM Coding Plan —— 需要配置 token
 
-GLM 需要你在智谱开放平台创建一个 Coding Plan 的 API key：
+GLM 需要你在对应区域的平台创建一个 Coding Plan 的 API key。**token 必须和 region 成对配置**——中国站 token 不能发给全球站，反之亦然。
 
+**中国站（bigmodel，默认）：**
 1. 登录 [bigmodel.cn](https://bigmodel.cn/) → 个人编程套餐 → 套餐概览 → 新建 API Key
-2. 在项目根目录创建 `.env.local`：
-
+2. `.env.local`：
 ```bash
-GLM_CODING_PLAN_TOKEN=你的-glm-coding-plan-token
-# 可选：区域，默认 bigmodel（open.bigmodel.cn）
-GLM_CODING_PLAN_REGION=bigmodel   # 或 zai（api.z.ai 全球站）
+GLM_CODING_PLAN_TOKEN=你的中国站-token
+GLM_CODING_PLAN_REGION=bigmodel   # 默认值，可省略
 ```
 
-3. 重启 `npm run dev`，GLM 卡片即显示真实数据（5 小时 token 窗口 + MCP 工具月度调用量）。
+**全球站（zai）：**
+1. 登录 [Z.AI 开发者控制台](https://z.ai/) 获取对应 Coding Plan token
+2. `.env.local`：
+```bash
+GLM_CODING_PLAN_TOKEN=你的全球站-token
+GLM_CODING_PLAN_REGION=zai
+```
+
+> ⚠️ `GLM_CODING_PLAN_REGION` 只能是 `bigmodel` 或 `zai`。其他值会在启动时报错（不会静默回落到默认区域）。
+
+重启 `npm run dev` 后，GLM 卡片即显示真实数据（5 小时 token 窗口 + MCP 工具月度调用量）。
 
 ### Kimi Code —— 通常无需配置
 
@@ -131,7 +140,10 @@ CODEX_BINARY_PATH=...           # 指定 codex 二进制路径
 <details>
 <summary><b>Kimi 卡片显示 token_expired</b></summary>
 
-正常情况下 Usage-Bar 会自动刷新（token 15 分钟过期自动 renew）。如果持续报错，重新 `kimi login` 即可。
+取决于你的配置方式：
+
+- **使用 `KIMI_CODE_ACCESS_TOKEN`**：该环境变量**不会自动续期**。替换为新 token，或删除该环境变量后重启 Usage-Bar，使其回到 CLI credential 模式（支持自动刷新）。
+- **使用 CLI credential 文件**（默认）：运行 `kimi login` 重新登录即可。
 </details>
 
 <details>
@@ -142,20 +154,18 @@ CODEX_BINARY_PATH=...           # 指定 codex 二进制路径
 
 ## 验证真实数据（smoke test）
 
-想确认三家的真实账户连接都正常？跑一次 smoke test：
-
 ```bash
 npm run smoke
 ```
 
-它会逐一验证 Codex / GLM（两站）/ Kimi 的真实连接，并把脱敏结果写入 `docs/smoke-test-report.md`。**不会**上传或记录任何 token、账号或原始响应。
+`npm run smoke` 会验证 Codex、`GLM_CODING_PLAN_REGION` 当前选择的 GLM 区域和 Kimi。报告仅保存在本地并被 gitignore，只记录允许字段，不包含 token、账号、safeMessage 或原始响应。验证请求仍会将凭据发送到相应 provider 的 API/OAuth endpoint。
 
 ## 技术栈
 
 - **框架**: Next.js 15（App Router，前后端一体）
 - **前端**: React 19 + TypeScript + Tailwind CSS
 - **后端**: Next.js Route Handlers（`/api/v1/quota`）
-- **测试**: Vitest（123 个单元测试 + opt-in smoke test）
+- **测试**: Vitest 单元/集成测试 + opt-in 真实账户 smoke test
 - **校验**: ESLint + tsc
 
 ## 项目结构
