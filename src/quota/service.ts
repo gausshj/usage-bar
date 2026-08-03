@@ -198,23 +198,62 @@ export async function buildDefaultAdapters(): Promise<Record<ProviderId, QuotaPr
   // Use the shared config parser so smoke tests and the service always agree
   // on endpoints and region validation (review P1-2).
   const { parseProviderConfigs } = await import('./config.js');
-  const cfg = parseProviderConfigs();
 
-  return {
-    codex_chatgpt: new CodexProvider(),
-    glm_coding_plan: new GlmProvider({
+  // Build GLM adapter separately — an invalid region (ConfigError from
+  // parseProviderConfigs) must only affect GLM, never crash the whole factory
+  // and take down Codex/Kimi (P1). Codex/Kimi read env directly.
+  let glmAdapter;
+  try {
+    const cfg = parseProviderConfigs();
+    glmAdapter = new GlmProvider({
       token: cfg.glm.token,
       credentialId: glmCredId,
       resolver,
       region: cfg.glm.region,
       baseUrl: cfg.glm.baseUrl,
-    }),
+    });
+  } catch (e) {
+    const safeMsg = e instanceof Error ? e.message : String(e);
+    glmAdapter = makeErrorAdapter('glm_coding_plan', 'GLM Coding Plan', {
+      code: 'invalid_config',
+      safeMessage: safeMsg,
+    });
+  }
+
+  return {
+    codex_chatgpt: new CodexProvider(),
+    glm_coding_plan: glmAdapter,
     kimi_code: new KimiProvider({
-      accessToken: cfg.kimi.accessToken,
+      accessToken: process.env.KIMI_CODE_ACCESS_TOKEN || undefined,
       credentialId: kimiCredId,
       resolver,
-      baseUrl: cfg.kimi.baseUrl,
+      baseUrl: process.env.KIMI_CODE_BASE_URL || undefined,
     }),
+  };
+}
+
+/** A minimal adapter that always returns a single error snapshot (P1). */
+function makeErrorAdapter(
+  providerId: ProviderId,
+  displayName: string,
+  error: { code: string; safeMessage: string },
+): QuotaProviderAdapter {
+  return {
+    providerId,
+    displayName,
+    isConfigured: () => false,
+    async fetch() {
+      return {
+        providerId,
+        status: 'error' as const,
+        fetchedAt: new Date().toISOString(),
+        observedAt: null,
+        source: { kind: 'official_compatibility' as const, name: displayName, version: null, isFallback: false },
+        plan: { name: null, accountLabel: null },
+        buckets: [],
+        error: { ...error, retryable: false },
+      };
+    },
   };
 }
 

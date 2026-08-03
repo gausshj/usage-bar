@@ -27,12 +27,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..', '..');
 
 // Load .env.local into process.env (no secrets printed).
+// Uses the shared dotenv-compatible parser (review P2).
 try {
   const envFile = readFileSync(join(root, '.env.local'), 'utf8');
-  for (const line of envFile.split('\n')) {
-    const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.*)\s*$/);
-    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2];
-  }
+  const { parseDotenv } = await import('../../src/quota/dotenv-parse.js');
+  parseDotenv(envFile, process.env);
 } catch {
   // no .env.local
 }
