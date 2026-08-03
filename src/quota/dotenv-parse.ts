@@ -19,26 +19,36 @@ export function parseDotenv(
   target: Record<string, string | undefined> = {},
 ): Record<string, string | undefined> {
   for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx < 0) continue;
-    const key = trimmed.slice(0, eqIdx).trim();
-    let value = trimmed.slice(eqIdx + 1).trim();
-
-    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
-      // Double-quoted: strip quotes, keep everything else verbatim.
-      value = value.slice(1, -1);
-    } else if (value.startsWith("'") && value.endsWith("'") && value.length >= 2) {
-      // Single-quoted: same.
-      value = value.slice(1, -1);
-    } else {
-      // Unquoted: strip inline comment ` # ...` and trailing whitespace.
-      const commentIdx = value.indexOf(' #');
-      if (commentIdx >= 0) value = value.slice(0, commentIdx).trim();
-    }
-
-    if (key && target[key] === undefined) target[key] = value;
+    const entry = parseEnvLine(line);
+    if (entry && target[entry[0]] === undefined) target[entry[0]] = entry[1];
   }
   return target;
+}
+
+/** Parse a single line into [key, value], or null if it should be skipped. */
+function parseEnvLine(line: string): [string, string] | null {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith('#')) return null;
+  const eqIdx = trimmed.indexOf('=');
+  if (eqIdx < 0) return null;
+  const key = trimmed.slice(0, eqIdx).trim();
+  if (!key) return null;
+  return [key, parseEnvValue(trimmed.slice(eqIdx + 1).trim())];
+}
+
+/** Strip quotes / inline comments from a raw value string. */
+function parseEnvValue(value: string): string {
+  // Quoted (double or single): strip surrounding quotes, keep content verbatim.
+  if (isQuoted(value, '"') || isQuoted(value, "'")) {
+    return value.slice(1, -1);
+  }
+  // Unquoted: strip inline comment ` # ...` and trailing whitespace.
+  const commentIdx = value.indexOf(' #');
+  if (commentIdx >= 0) return value.slice(0, commentIdx).trim();
+  return value;
+}
+
+/** True if value is wrapped in matching quote chars (length ≥ 2). */
+function isQuoted(value: string, quote: string): boolean {
+  return value.length >= 2 && value.startsWith(quote) && value.endsWith(quote);
 }
