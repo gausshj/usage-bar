@@ -21,7 +21,7 @@ v1 supports three products:
 - 📊 **Three-card quota board** — fixed cards for Codex / GLM / Kimi with used/remaining percentage, reset countdown, and usage breakdown
 - 🔌 **Data-source levels** — distinguishes Official Protocol (Codex App Server), Official Compatibility (GLM/Kimi), and Local Estimate (fallback)
 - 🧯 **Graceful degradation** — one provider failing never blocks the others; on failure the last good data is kept and marked Stale
-- 🔒 **Local-first** — binds to `127.0.0.1` only; credentials never hit a database or leave your machine
+- 🔒 **Local-first** — binds to `127.0.0.1` only. Credentials are never sent to Usage-Bar's own backend or telemetry — they are only sent to the provider endpoints you configure
 - 📈 **Codex Activity (Beta)** — estimates the last 7 days of token usage from local session files
 
 ## Quick start
@@ -31,7 +31,7 @@ v1 supports three products:
 ### Run with zero config
 
 ```bash
-git clone git@github.com:gausshj/usage-bar.git
+git clone https://github.com/gausshj/usage-bar.git
 cd usage-bar
 npm install
 npm run dev          # binds to 127.0.0.1:3000
@@ -42,10 +42,11 @@ Open `http://127.0.0.1:3000`.
 **The page loads with no configuration at all.** Each card shows a status based on which agent CLIs you've logged into locally:
 - If you've installed and logged into the corresponding agent CLI, the card shows real quota data.
 - If not, the card shows a "not configured" hint (without affecting the others).
+- **Note**: GLM is different — it has no local login state to read, so you must configure a token explicitly (see below).
 
 ## Getting real data for each provider
 
-Usage-Bar works by reading the login state / credentials of your local agent CLIs. So activation differs per provider — **in most cases you configure nothing**, as long as the CLI is logged in.
+Usage-Bar works by reading the login state / credentials of your local agent CLIs. Codex and Kimi usually need no config (just have the CLI logged in), but **GLM requires an explicit token**.
 
 ### Codex — no config needed
 
@@ -82,8 +83,9 @@ As long as you've installed and logged into the Kimi CLI, Usage-Bar reads `~/.ki
 kimi login
 ```
 
-> If auto-read doesn't work (e.g. non-default path), set it explicitly in `.env.local`:
+> ⚠️ **KIMI_CODE_ACCESS_TOKEN does not auto-renew.** Auto-refresh only works when using the CLI's credential file path. If you set `KIMI_CODE_ACCESS_TOKEN` explicitly, it won't refresh after expiry — you'll need to replace it manually.
 > ```bash
+> # Fallback only (no auto-renewal) when the credential file path is unavailable:
 > KIMI_CODE_ACCESS_TOKEN=your-kimi-code-access-token
 > ```
 
@@ -100,15 +102,7 @@ kimi login
 ## Advanced configuration (optional)
 
 <details>
-<summary>Expand: credentialId integration, custom endpoints, etc.</summary>
-
-Instead of a raw token, credentials can be injected via a credential store (with scope validation):
-
-```bash
-# Use a credentialId instead of a raw token (requires a credential store)
-GLM_CREDENTIAL_ID=your-credential-id
-KIMI_CREDENTIAL_ID=your-credential-id
-```
+<summary>Expand: custom endpoints, etc.</summary>
 
 Custom endpoints (usually unnecessary):
 
@@ -117,6 +111,9 @@ GLM_CODING_PLAN_BASE_URL=...    # custom GLM base URL
 KIMI_CODE_BASE_URL=...          # custom Kimi base URL
 CODEX_BINARY_PATH=...           # custom path to the codex binary
 ```
+
+> ⚠️ **Note**: If you configure a custom base URL, your token will be sent to that URL.
+> Only set this if you trust the endpoint.
 
 </details>
 

@@ -6,7 +6,9 @@
 //   npm run smoke
 //
 // Each provider is verified against real state and results are appended to
-// docs/smoke-test-report.md (redacted — no tokens/accounts/raw responses).
+// docs/smoke-test-report.md. The report records ONLY an allowlisted set of
+// fields (provider / path / source kind / version / status / error code) —
+// never tokens, account identity, safeMessages, or raw responses.
 // ============================================================================
 
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
@@ -14,6 +16,8 @@ import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+
+import type { QuotaSnapshot } from '../../src/quota/contract.js';
 
 // Only run when explicitly opted in.
 const SMOKE = process.env.SMOKE === '1' || process.env.SMOKE === 'true';
@@ -34,59 +38,59 @@ try {
 }
 
 const startedAt = new Date().toISOString();
+
+// Report rows — strictly allowlisted fields only (review #1: no safeMessage,
+// no raw responses). error code is fine (it's a stable enum, not free text).
 const report: Array<{
   provider: string;
   path: string;
+  sourceKind: string;
   version: string | null;
   status: string;
-  fields: string | null;
-  error: string | null;
+  errorCode: string | null;
   ok: boolean;
 }> = [];
 
-function redact(text: string): string {
-  return text
-    .replace(/(sk-[a-zA-Z0-9-_]{6,})[a-zA-Z0-9-_]*/g, '$1***')
-    .replace(/(Bearer\s+)[a-zA-Z0-9-_.]+/gi, '$1***');
+function row(snap: QuotaSnapshot, provider: string, path: string): void {
+  report.push({
+    provider,
+    path,
+    sourceKind: snap.source.kind,
+    version: snap.source.version,
+    status: snap.status,
+    errorCode: snap.error?.code ?? null,
+    ok: snap.status === 'ready',
+  });
 }
 
 run('real-account smoke test', () => {
-  it('codex via App Server', async () => {
+  it('codex via App Server (official protocol, not rollout fallback)', async () => {
     const { CodexProvider } = await import('../../src/quota/providers/codex.js');
     const snap = await new CodexProvider().fetch(null);
-    report.push({
-      provider: 'codex_chatgpt',
-      path: 'App Server (official_protocol)',
-      version: snap.source.version,
-      status: snap.status,
-      fields: snap.status === 'ready' ? `buckets=${snap.buckets.length}, plan=${snap.plan.name}` : null,
-      error: snap.error ? `${snap.error.code}: ${snap.error.safeMessage}` : null,
-      ok: snap.status === 'ready',
-    });
+    row(snap, 'codex_chatgpt', 'App Server');
+    // Must be ready AND actually via the official protocol — a rollout
+    // fallback (local_estimate) is NOT an App Server success (#1).
     expect(snap.status).toBe('ready');
+    expect(snap.source.kind).toBe('official_protocol');
   }, 20000);
 
-  for (const region of ['bigmodel', 'zai'] as const) {
-    it(`glm via monitor API (${region})`, async () => {
-      const token = process.env.GLM_CODING_PLAN_TOKEN || process.env.GLM_QUOTA_TOKEN;
-      const { GlmProvider } = await import('../../src/quota/providers/glm.js');
-      const snap = await new GlmProvider({ token, region }).fetch(null);
-      report.push({
-        provider: `glm_coding_plan (${region})`,
-        path: 'monitor API (official_compatibility)',
-        version: snap.source.version,
-        status: snap.status,
-        fields: snap.status === 'ready' ? `buckets=${snap.buckets.length}` : null,
-        error: snap.error ? `${snap.error.code}: ${snap.error.safeMessage}` : null,
-        ok: snap.status === 'ready',
-      });
-      if (!token) {
-        expect(snap.status).toBe('unconfigured');
-      }
-      // Always assert a valid, known status regardless of credential state.
-      expect(['ready', 'stale', 'unconfigured', 'unavailable', 'unsupported', 'error']).toContain(snap.status);
-    }, 15000);
-  }
+  it('glm via monitor API (configured region only)', async () => {
+    const token = process.env.GLM_CODING_PLAN_TOKEN || process.env.GLM_QUOTA_TOKEN;
+    if (!token) {
+      // No token → must NOT pass; mark as skipped expectation explicitly.
+      expect(token).toBeTruthy();
+      return;
+    }
+    // Test ONLY the configured region — never send the same token to both the
+    // CN and global domains (#1). Default to bigmodel if unset.
+    const region = process.env.GLM_CODING_PLAN_REGION === 'zai' ? 'zai' : 'bigmodel';
+    const { GlmProvider } = await import('../../src/quota/providers/glm.js');
+    const snap = await new GlmProvider({ token, region }).fetch(null);
+    row(snap, `glm_coding_plan (${region})`, 'monitor API');
+    // Must be ready AND via official_compatibility — not unconfigured/error (#1).
+    expect(snap.status).toBe('ready');
+    expect(snap.source.kind).toBe('official_compatibility');
+  }, 15000);
 
   it('kimi via OAuth refresh + usages', async () => {
     const { KimiProvider } = await import('../../src/quota/providers/kimi.js');
@@ -95,21 +99,13 @@ run('real-account smoke test', () => {
       credentialsPath: join(homedir(), '.kimi-code/credentials/kimi-code.json'),
     });
     const snap = await p.fetch(null);
-    report.push({
-      provider: 'kimi_code',
-      path: 'OAuth refresh + usages (official_compatibility)',
-      version: snap.source.version,
-      status: snap.status,
-      fields: snap.status === 'ready' ? `buckets=${snap.buckets.length}, balances=${snap.balances?.length ?? 0}` : null,
-      error: snap.error ? `${snap.error.code}: ${snap.error.safeMessage}` : null,
-      ok: snap.status === 'ready',
-    });
-    // Smoke tests must not hard-fail on an expired credential, but the snapshot
-    // must always be a valid, known status (SonarCloud S2699 needs an assertion).
-    expect(['ready', 'stale', 'unconfigured', 'unavailable', 'unsupported', 'error']).toContain(snap.status);
+    row(snap, 'kimi_code', 'OAuth refresh + usages');
+    // Must be ready AND via official_compatibility — not unconfigured/error (#1).
+    expect(snap.status).toBe('ready');
+    expect(snap.source.kind).toBe('official_compatibility');
   }, 20000);
 
-  it('writes a redacted report to docs/smoke-test-report.md', () => {
+  it('writes an allowlisted report to docs/smoke-test-report.md', () => {
     mkdirSync(join(root, 'docs'), { recursive: true });
     const outPath = join(root, 'docs', 'smoke-test-report.md');
     const lines = [
@@ -118,11 +114,11 @@ run('real-account smoke test', () => {
       `- started: ${startedAt}`,
       `- completed: ${new Date().toISOString()}`,
       ``,
-      `| Provider | Path | Version | Status | Fields | Error |`,
+      `| Provider | Path | Source | Version | Status | Error Code |`,
       `|---|---|---|---|---|---|`,
       ...report.map(
         (r) =>
-          `| ${r.provider} | ${r.path} | ${r.version ?? '-'} | ${r.status} | ${r.fields ?? '-'} | ${r.error ? redact(r.error) : '-'} |`,
+          `| ${r.provider} | ${r.path} | ${r.sourceKind} | ${r.version ?? '-'} | ${r.status} | ${r.errorCode ?? '-'} |`,
       ),
       ``,
     ];

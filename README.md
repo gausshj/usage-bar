@@ -21,7 +21,7 @@ v1 支持三个产品：
 - 📊 **三卡配额看板** — 固定显示 Codex / GLM / Kimi 三张卡片，含已用/剩余百分比、重置倒计时、用量明细
 - 🔌 **多数据源等级** — 区分官方协议（Codex App Server）、官方兼容（GLM/Kimi）、本地估算（降级）
 - 🧯 **容错降级** — 单个供应商失败不影响其他家；失败时保留上次有效数据并标记 Stale
-- 🔒 **本地优先** — 默认仅监听 `127.0.0.1`，凭据不经过数据库、不外传
+- 🔒 **本地优先** — 默认仅监听 `127.0.0.1`。凭据不会发送给 Usage-Bar 自有后端或遥测，只会发送到你配置的 provider endpoint
 - 📈 **Codex Activity (Beta)** — 从本地 session 文件估算近 7 天 token 用量
 
 ## 快速开始
@@ -31,7 +31,7 @@ v1 支持三个产品：
 ### 零配置直接跑
 
 ```bash
-git clone git@github.com:gausshj/usage-bar.git
+git clone https://github.com/gausshj/usage-bar.git
 cd usage-bar
 npm install
 npm run dev          # 默认绑定 127.0.0.1:3000
@@ -42,10 +42,11 @@ npm run dev          # 默认绑定 127.0.0.1:3000
 **此时不做任何配置，页面也能打开**，会看到三张卡片分别显示各自状态：
 - 如果你本地装过对应的 agent CLI 且已登录，卡片会显示真实配额数据
 - 如果没有，卡片显示"未配置"提示（不影响其他卡片）
+- **注意**：GLM 不一样——它没有本地登录态可读，必须显式配置 token（见下文）
 
 ## 让三家显示真实数据
 
-Usage-Bar 的原理是**读取你本地 agent CLI 的登录态/凭据**。所以激活方式因 provider 而异——**大多数情况你什么都不用配**，只要对应的 CLI 已登录过。
+Usage-Bar 的原理是**读取你本地 agent CLI 的登录态/凭据**。所以激活方式因 provider 而异——Codex 和 Kimi 通常不用配（CLI 已登录过就行），**GLM 必须显式配置 token**。
 
 ### Codex —— 无需配置
 
@@ -75,15 +76,16 @@ GLM_CODING_PLAN_REGION=bigmodel   # 或 zai（api.z.ai 全球站）
 
 ### Kimi Code —— 通常无需配置
 
-只要你在本机装过 Kimi CLI 并登录过，Usage-Bar 会自动读取 `~/.kimi-code/credentials/` 的登录态，并在 token 过期时自动刷新（15 分钟过期会自动 renew），**无需配置**。
+只要你在本机装过 Kimi CLI 并登录过，Usage-Bar 会自动读取 `~/.kimi-code/credentials/` 的登录态，并在 token 过期时自动刷新（Kimi token 15 分钟过期，自动 renew），**无需配置**。
 
 ```bash
 # 如果没登录过，先登录：
 kimi login
 ```
 
-> 如果自动读取不工作（比如非默认路径），可在 `.env.local` 显式指定：
+> ⚠️ **KIMI_CODE_ACCESS_TOKEN 不会自动续期**。自动刷新（refresh）只有当你使用 CLI 的 credential 文件路径时才有效。如果你显式设置了 `KIMI_CODE_ACCESS_TOKEN`，它过期后不会再自动更新，需要你手动换新的。
 > ```bash
+> # 仅在 credential 文件路径不可用时的备选（不自动续期）：
 > KIMI_CODE_ACCESS_TOKEN=你的-kimi-code-access-token
 > ```
 
@@ -100,15 +102,7 @@ kimi login
 ## 高级配置（可选）
 
 <details>
-<summary>展开：credentialId 集成、自定义端点等</summary>
-
-凭据除了裸 token，还可以通过 credential store（带 scope 校验）注入：
-
-```bash
-# 用 credentialId 而非裸 token（需配 credential store）
-GLM_CREDENTIAL_ID=你的-credential-id
-KIMI_CREDENTIAL_ID=你的-credential-id
-```
+<summary>展开：自定义端点等</summary>
 
 自定义端点（一般不需要）：
 
@@ -117,6 +111,9 @@ GLM_CODING_PLAN_BASE_URL=...    # GLM 自定义 base URL
 KIMI_CODE_BASE_URL=...          # Kimi 自定义 base URL
 CODEX_BINARY_PATH=...           # 指定 codex 二进制路径
 ```
+
+> ⚠️ **注意**：如果你配置了自定义 base URL，你的 token 会被发送到那个 URL。
+> 只有在你信任该 endpoint 时才设置它。
 
 </details>
 
