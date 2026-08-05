@@ -3,8 +3,13 @@
 // Kimi Code quota provider (official_compatibility).
 //
 // Endpoint: GET https://api.kimi.com/coding/v1/usages
-// Auth: Bearer <accessToken> — the Kimi Code OAuth access token, obtained via
-// the device-code flow by kimi-cli and stored at ~/.kimi-code/credentials/.
+// Auth: Bearer <credential> — two first-class credential kinds (#40):
+//   1. api_key: a Console-issued API key (Kimi Code Console → API Keys), passed
+//      via KIMI_CODE_ACCESS_TOKEN or a credentialId. Static: NEVER sent through
+//      the OAuth refresh flow; a 401 means the key is invalid/revoked.
+//   2. oauth_token: the Kimi CLI OAuth access token, obtained via the
+//      device-code flow and stored at ~/.kimi-code/credentials/. Short-lived
+//      (~15min) and auto-refreshed via the stored refresh_token (#15).
 // This is the KIMI CODE subscription usage, NOT Moonshot Open Platform balance
 // (PRD §7.3 explicitly forbids substituting the latter).
 //
@@ -21,7 +26,11 @@ import {
   kimiUsagesResponseSchema,
   type KimiUsagesResponseParsed,
 } from '../schemas.js';
-import type { CredentialResolver, ExpectedScope } from '../credentials.js';
+import {
+  CredentialScopeMismatchError,
+  type CredentialResolver,
+  type ExpectedScope,
+} from '../credentials.js';
 import type {
   QuotaBucket,
   QuotaBalance,
@@ -30,7 +39,7 @@ import type {
 } from '../contract.js';
 
 export interface KimiProviderConfig {
-  /** Access token override; otherwise read from kimi-cli credentials. env fallback. */
+  /** Console API key (or static token) override; otherwise read from kimi-cli credentials. env fallback. */
   accessToken?: string;
   /** A credentialId resolved via `resolver` with scope validation (#22). */
   credentialId?: string;
@@ -42,7 +51,16 @@ export interface KimiProviderConfig {
   baseUrl?: string;
 }
 
-const EXPECTED_SCOPE: ExpectedScope = { provider: 'kimi_code', kind: 'oauth_token' };
+/** The two credential kinds this adapter accepts (#40). */
+type KimiCredentialKind = 'api_key' | 'oauth_token';
+
+// credentialId credentials may be stored as either kind; both are valid for
+// /usages. Scope validation tries each in turn — a kind mismatch falls through
+// to the next, any other failure (missing/revoked) aborts immediately.
+const EXPECTED_SCOPES: ExpectedScope[] = [
+  { provider: 'kimi_code', kind: 'api_key' },
+  { provider: 'kimi_code', kind: 'oauth_token' },
+];
 
 const PROVIDER_ID = 'kimi_code' as const;
 const DISPLAY_NAME = 'Kimi Code';
@@ -95,22 +113,26 @@ export class KimiProvider implements QuotaProviderAdapter {
   async fetch(previous: QuotaSnapshot | null): Promise<QuotaSnapshot> {
     const fetchedAt = new Date().toISOString();
 
-    // Resolve a valid access token, refreshing via OAuth if necessary (#15).
-    let token: string;
+    // Resolve a usable credential. OAuth tokens are refreshed via OAuth if
+    // necessary (#15); API keys are used as-is and never refreshed (#40).
+    let cred: { token: string; kind: KimiCredentialKind };
     try {
-      token = await this.resolveAccessToken();
+      cred = await this.resolveAccessToken();
     } catch {
       return empty(fetchedAt, previous, {
         code: 'token_expired',
-        safeMessage: 'Kimi Code token expired or revoked. Re-login via kimi-cli.',
+        safeMessage: this.credentialId
+          ? 'Kimi Code credential could not be resolved (missing, revoked, or wrong scope).'
+          : 'Kimi Code token expired or revoked. Run `kimi login` to re-authenticate.',
         retryable: false,
       }, 'unconfigured');
     }
 
-    if (!token) {
+    if (!cred.token) {
       return empty(fetchedAt, previous, {
         code: 'no_credentials',
-        safeMessage: 'Kimi Code not logged in. Run kimi-cli login.',
+        safeMessage:
+          'Kimi Code not configured. Set KIMI_CODE_ACCESS_TOKEN to a Kimi Code Console API key, or run `kimi login`.',
         retryable: false,
       }, 'unconfigured');
     }
@@ -118,45 +140,45 @@ export class KimiProvider implements QuotaProviderAdapter {
     try {
       const result = await fetchJson<unknown>('kimi', `${this.baseUrl}/usages`, {
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${cred.token}`,
           Accept: 'application/json',
         },
       });
       const parsed = parseWithSchema('kimi', kimiUsagesResponseSchema, result.value);
       return this.toSnapshot(parsed, fetchedAt, previous);
     } catch (err) {
-      return this.toErrorSnapshot(err, fetchedAt, previous);
+      return this.toErrorSnapshot(err, fetchedAt, previous, cred.kind);
     }
   }
 
   /**
-   * Resolve a valid access token. If an override is configured, use it as-is.
-   * Otherwise read the credentials file; if the stored token is expired (or
-   * near expiry), refresh it via the OAuth refresh_token grant and write the
-   * refreshed credentials back so kimi-cli and this app stay in sync (#15).
+   * Resolve a usable credential and its kind. A credentialId may be stored as
+   * either an API key or an OAuth token (both are accepted, #40); an explicit
+   * accessToken override is treated as a static API key and used as-is.
+   * Otherwise read the CLI credentials file; if the stored token is expired
+   * (or near expiry), refresh it via the OAuth refresh_token grant and write
+   * the refreshed credentials back so kimi-cli and this app stay in sync (#15).
    * Throws if no usable token can be obtained.
    */
-  private async resolveAccessToken(): Promise<string> {
-    // credentialId takes precedence: resolve + scope-validate via the resolver.
-    if (this.credentialId) {
-      if (!this.resolver) throw new Error('credentialId set but no resolver provided');
-      return this.resolver.reveal(this.credentialId, EXPECTED_SCOPE);
-    }
-    if (this.accessTokenOverride) return this.accessTokenOverride;
+  private async resolveAccessToken(): Promise<{ token: string; kind: KimiCredentialKind }> {
+    // credentialId takes precedence: resolve + scope-validate via the resolver,
+    // accepting either credential kind.
+    if (this.credentialId) return this.resolveCredentialById(this.credentialId);
+    if (this.accessTokenOverride) return { token: this.accessTokenOverride, kind: 'api_key' };
 
     const creds = readCredentials(this.credentialsPath);
-    if (!creds.access_token && !creds.refresh_token) return '';
+    if (!creds.access_token && !creds.refresh_token) return { token: '', kind: 'oauth_token' };
 
     // Use the stored token if it is still valid.
     if (creds.access_token && !isExpired(creds)) {
-      return creds.access_token;
+      return { token: creds.access_token, kind: 'oauth_token' };
     }
 
     // Token expired or missing. If there's no refresh_token, fall back to the
     // (stale) access_token — the usages request will likely 401, which maps to
-    // a safe error. The guard at line 132 guarantees access_token is set here.
+    // a safe error. The guard above guarantees access_token is set here.
     if (!creds.refresh_token) {
-      return creds.access_token as string;
+      return { token: creds.access_token as string, kind: 'oauth_token' };
     }
 
     // Refresh via OAuth, then persist so kimi-cli stays in sync.
@@ -167,7 +189,32 @@ export class KimiProvider implements QuotaProviderAdapter {
     if (!refreshed.access_token) {
       throw new Error('kimi oauth refresh returned no access_token');
     }
-    return refreshed.access_token;
+    return { token: refreshed.access_token, kind: 'oauth_token' };
+  }
+
+  /**
+   * Resolve a credentialId to a token, accepting either credential kind (#40).
+   * A kind mismatch falls through to the next accepted kind; any other failure
+   * (missing, revoked) aborts immediately.
+   */
+  private async resolveCredentialById(
+    credentialId: string,
+  ): Promise<{ token: string; kind: KimiCredentialKind }> {
+    if (!this.resolver) throw new Error('credentialId set but no resolver provided');
+    for (const scope of EXPECTED_SCOPES) {
+      try {
+        const token = await this.resolver.reveal(credentialId, scope);
+        return { token, kind: scope.kind as KimiCredentialKind };
+      } catch (err) {
+        // A kind mismatch falls through to the next accepted kind; any other
+        // failure (missing, revoked) aborts immediately.
+        if (!(err instanceof CredentialScopeMismatchError)) throw err;
+      }
+    }
+    // Every accepted kind mismatched — the credential is not usable here.
+    throw new CredentialScopeMismatchError(
+      `credential matches none of the accepted kinds (id: ${credentialId})`,
+    );
   }
 
   // -----------------------------------------------------------------
@@ -231,8 +278,9 @@ export class KimiProvider implements QuotaProviderAdapter {
     err: unknown,
     fetchedAt: string,
     previous: QuotaSnapshot | null,
+    kind: KimiCredentialKind,
   ): QuotaSnapshot {
-    const { code, message, retryable, status } = classifyKimiError(err);
+    const { code, message, retryable, status } = classifyKimiError(err, kind);
     if (previous && previous.status === 'ready') {
       return { ...previous, status: 'stale', fetchedAt, error: { code, safeMessage: message, retryable } };
     }
@@ -366,7 +414,10 @@ function writeCredentials(path: string, creds: StoredCredentials): void {
 // Error classification (PRD §7.3: OAuth/token expiry → safe state)
 // ---------------------------------------------------------------------------
 
-function classifyKimiError(err: unknown): {
+function classifyKimiError(
+  err: unknown,
+  kind: KimiCredentialKind,
+): {
   code: string;
   message: string;
   retryable: boolean;
@@ -374,7 +425,18 @@ function classifyKimiError(err: unknown): {
 } {
   const e = err as { statusCode?: number; message?: string; isRetryable?: boolean };
   if (e.statusCode === 401) {
-    return { code: 'token_expired', message: 'Kimi Code token expired or revoked. Re-login.', retryable: false, status: 'unconfigured' };
+    // A 401 on a static API key is terminal: keys don't expire on a timer, so
+    // the key was revoked or is wrong — point the user at the Console (#40).
+    if (kind === 'api_key') {
+      return {
+        code: 'api_key_invalid',
+        message:
+          'Kimi Code API key invalid or revoked. Create a new key in the Kimi Code Console and update KIMI_CODE_ACCESS_TOKEN.',
+        retryable: false,
+        status: 'unconfigured',
+      };
+    }
+    return { code: 'token_expired', message: 'Kimi Code token expired or revoked. Run `kimi login` to re-authenticate.', retryable: false, status: 'unconfigured' };
   }
   if (e.statusCode === 403) {
     return { code: 'forbidden', message: 'Kimi Code access denied.', retryable: false, status: 'error' };

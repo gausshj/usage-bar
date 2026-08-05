@@ -83,20 +83,26 @@ GLM_CODING_PLAN_REGION=zai
 
 重启 `npm run dev` 后，GLM 卡片即显示真实数据（5 小时 token 窗口 + MCP 工具月度调用量）。
 
-### Kimi Code —— 通常无需配置
+### Kimi Code —— API Key 或 CLI 登录均可
 
-只要你在本机装过 Kimi CLI 并登录过，Usage-Bar 会自动读取 `~/.kimi-code/credentials/` 的登录态，并在 token 过期时自动刷新（Kimi token 15 分钟过期，自动 renew），**无需配置**。
+**方式一：Console API Key（最简单，无需安装 Kimi CLI）**
+
+Kimi 会员可在 Kimi Code Console 创建 API Key（最多 5 个，供第三方工具使用，见[官方文档](https://www.kimi.com/code/docs/en/)）。在 `.env.local` 中设置后重启即可：
+
+```bash
+KIMI_CODE_ACCESS_TOKEN=你的-console-api-key
+```
+
+**方式二：Kimi CLI 登录态（自动刷新）**
+
+如果你本机装过 Kimi CLI 并登录过，Usage-Bar 会自动读取 `~/.kimi-code/credentials/` 的登录态，并在 token 过期时自动刷新（Kimi OAuth token 15 分钟过期，自动 renew），无需配置。
 
 ```bash
 # 如果没登录过，先登录：
 kimi login
 ```
 
-> ⚠️ **KIMI_CODE_ACCESS_TOKEN 不会自动续期**。自动刷新（refresh）只有当你使用 CLI 的 credential 文件路径时才有效。如果你显式设置了 `KIMI_CODE_ACCESS_TOKEN`，它过期后不会再自动更新，需要你手动换新的。
-> ```bash
-> # 仅在 credential 文件路径不可用时的备选（不自动续期）：
-> KIMI_CODE_ACCESS_TOKEN=你的-kimi-code-access-token
-> ```
+> ⚠️ `KIMI_CODE_ACCESS_TOKEN` 不会自动续期。API key 被吊销或失效后，卡片会显示 `api_key_invalid`，需在 Console 重新创建并手动替换。自动刷新只在 CLI credential 文件模式下有效。
 
 ### 配置一览
 
@@ -104,7 +110,7 @@ kimi login
 |---|---|---|
 | **Codex** | ❌ 不用 | 登录过 Codex 即可（自动读 App Server） |
 | **GLM** | ✅ 需要 | `.env.local` 设 `GLM_CODING_PLAN_TOKEN` |
-| **Kimi** | ❌ 通常不用 | `kimi login` 即可（自动读 + 自动刷新） |
+| **Kimi** | ❌ 通常不用 | Console API Key（设 `KIMI_CODE_ACCESS_TOKEN`）或 `kimi login`（自动读 + 自动刷新） |
 
 **注意**：Kimi Code 用量 ≠ Moonshot Open Platform 余额，二者不可混用。
 
@@ -138,12 +144,12 @@ CODEX_BINARY_PATH=...           # 指定 codex 二进制路径
 </details>
 
 <details>
-<summary><b>Kimi 卡片显示 token_expired</b></summary>
+<summary><b>Kimi 卡片显示 token_expired / api_key_invalid</b></summary>
 
 取决于你的配置方式：
 
-- **使用 `KIMI_CODE_ACCESS_TOKEN`**：该环境变量**不会自动续期**。替换为新 token，或删除该环境变量后重启 Usage-Bar，使其回到 CLI credential 模式（支持自动刷新）。
-- **使用 CLI credential 文件**（默认）：运行 `kimi login` 重新登录即可。
+- **使用 `KIMI_CODE_ACCESS_TOKEN`（Console API Key）**：显示 `api_key_invalid` 说明 key 失效或被吊销。该环境变量**不会自动续期**——到 Kimi Code Console 重新创建 key 并替换；或删除该环境变量后重启 Usage-Bar，改用 CLI credential 模式（支持自动刷新）。
+- **使用 CLI credential 文件**：显示 `token_expired` 说明登录态失效，运行 `kimi login` 重新登录即可。
 </details>
 
 <details>
