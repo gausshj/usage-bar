@@ -201,20 +201,20 @@ export class KimiProvider implements QuotaProviderAdapter {
     credentialId: string,
   ): Promise<{ token: string; kind: KimiCredentialKind }> {
     if (!this.resolver) throw new Error('credentialId set but no resolver provided');
-    let mismatch: unknown;
     for (const scope of EXPECTED_SCOPES) {
       try {
         const token = await this.resolver.reveal(credentialId, scope);
         return { token, kind: scope.kind as KimiCredentialKind };
       } catch (err) {
-        if (err instanceof CredentialScopeMismatchError) {
-          mismatch = err;
-          continue;
-        }
-        throw err;
+        // A kind mismatch falls through to the next accepted kind; any other
+        // failure (missing, revoked) aborts immediately.
+        if (!(err instanceof CredentialScopeMismatchError)) throw err;
       }
     }
-    throw mismatch ?? new Error('no acceptable credential kind');
+    // Every accepted kind mismatched — the credential is not usable here.
+    throw new CredentialScopeMismatchError(
+      `credential matches none of the accepted kinds (id: ${credentialId})`,
+    );
   }
 
   // -----------------------------------------------------------------
