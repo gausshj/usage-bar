@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { KimiProvider } from '../../src/quota/providers/kimi.js';
+import { CredentialScopeMismatchError } from '../../src/quota/credentials.js';
 
 function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -61,14 +62,15 @@ describe('KimiProvider', () => {
     expect(snap.balances![0].amount).toBe(500000);
   });
 
-  it('maps a 401 to unconfigured with token_expired code', async () => {
+  it('maps a 401 on an API key to a non-retryable api_key_invalid state (#40)', async () => {
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
       jsonResponse(401, {}),
     );
     const snap = await new KimiProvider({ accessToken: 'tok' }).fetch(null);
     expect(snap.status).toBe('unconfigured');
-    expect(snap.error?.code).toBe('token_expired');
+    expect(snap.error?.code).toBe('api_key_invalid');
     expect(snap.error?.retryable).toBe(false);
+    expect(snap.error?.safeMessage).toContain('Console');
   });
 
   it('returns unconfigured when no access token is available', async () => {
@@ -123,9 +125,9 @@ describe('KimiProvider', () => {
     expect(snap.status).toBe('ready');
   });
 
-  it('resolves the access token via credentialId with scope validation (#22)', async () => {
+  it('resolves the access token via credentialId with scope validation (#22, #40)', async () => {
     const resolver = {
-      reveal: vi.fn().mockResolvedValue('resolved-oauth-token'),
+      reveal: vi.fn().mockResolvedValue('resolved-api-key'),
     };
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
       jsonResponse(200, { usage: { used: '9', limit: '100' } }),
@@ -134,12 +136,49 @@ describe('KimiProvider', () => {
     const p = new KimiProvider({ credentialId: 'cred-kimi', resolver });
     const snap = await p.fetch(null);
 
+    // API-key kind is tried first; the mock accepts it, so no fallback happens.
+    expect(resolver.reveal).toHaveBeenCalledTimes(1);
     expect(resolver.reveal).toHaveBeenCalledWith('cred-kimi', {
+      provider: 'kimi_code',
+      kind: 'api_key',
+    });
+    expect(snap.status).toBe('ready');
+    expect(snap.buckets[0].used).toBe(9);
+  });
+
+  it('falls back to the oauth_token kind when the credential is not an api_key (#40)', async () => {
+    const resolver = {
+      reveal: vi.fn().mockImplementation(async (_id: string, scope: { kind: string }) => {
+        if (scope.kind === 'api_key') {
+          throw new CredentialScopeMismatchError('kind mismatch');
+        }
+        return 'resolved-oauth-token';
+      }),
+    };
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, { usage: { used: '4', limit: '100' } }),
+    );
+
+    const p = new KimiProvider({ credentialId: 'cred-kimi', resolver });
+    const snap = await p.fetch(null);
+
+    expect(resolver.reveal).toHaveBeenCalledTimes(2);
+    expect(resolver.reveal).toHaveBeenLastCalledWith('cred-kimi', {
       provider: 'kimi_code',
       kind: 'oauth_token',
     });
     expect(snap.status).toBe('ready');
-    expect(snap.buckets[0].used).toBe(9);
+  });
+
+  it('maps a 401 on a credentialId API key to api_key_invalid (#40)', async () => {
+    const resolver = { reveal: vi.fn().mockResolvedValue('console-key') };
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(401, {}),
+    );
+    const snap = await new KimiProvider({ credentialId: 'cred-kimi', resolver }).fetch(null);
+    expect(snap.status).toBe('unconfigured');
+    expect(snap.error?.code).toBe('api_key_invalid');
+    expect(snap.error?.retryable).toBe(false);
   });
 
   it('maps a resolver failure to a safe error without calling usages', async () => {
@@ -228,6 +267,60 @@ describe('KimiProvider', () => {
     expect(snap.buckets[1].label).toBe('2-week');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Console API key auth path (issue #40)
+// ---------------------------------------------------------------------------
+
+describe('KimiProvider Console API key path', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('sends the API key as a Bearer token and never touches the OAuth refresh endpoint', async () => {
+    const mock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mock.mockResolvedValue(jsonResponse(200, { usage: { used: '1', limit: '10' } }));
+
+    const snap = await new KimiProvider({ accessToken: 'console-api-key' }).fetch(null);
+
+    expect(snap.status).toBe('ready');
+    expect(mock).toHaveBeenCalledTimes(1);
+    const [url, init] = mock.mock.calls[0];
+    expect(String(url)).toContain('/usages');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer console-api-key');
+    expect(String(url)).not.toContain('auth.kimi.com');
+  });
+
+  it('still maps a 401 on the OAuth (CLI file) path to token_expired', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'kimi-creds-'));
+    try {
+      const credsPath = join(dir, 'kimi-code.json');
+      await writeFile(
+        credsPath,
+        JSON.stringify({
+          access_token: 'oauth-tok',
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+        }),
+      );
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+        jsonResponse(401, {}),
+      );
+      const snap = await new KimiProvider({ credentialsPath: credsPath }).fetch(null);
+      expect(snap.status).toBe('unconfigured');
+      expect(snap.error?.code).toBe('token_expired');
+      expect(snap.error?.safeMessage).toContain('kimi login');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 
 // ---------------------------------------------------------------------------
 // OAuth token refresh path (issue #32)

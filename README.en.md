@@ -83,20 +83,26 @@ GLM_CODING_PLAN_REGION=zai
 
 Restart `npm run dev`. The GLM card then shows real data (5-hour token window + monthly MCP tool-call quota).
 
-### Kimi Code — usually no config
+### Kimi Code — API key or CLI login, your choice
 
-As long as you've installed and logged into the Kimi CLI, Usage-Bar reads `~/.kimi-code/credentials/` automatically and refreshes the token when it expires (tokens last 15 minutes and auto-renew). **Nothing to configure.**
+**Option 1: Console API key (simplest, no Kimi CLI required)**
+
+Kimi members can create API keys in the Kimi Code Console (up to 5, intended for third-party tools — see the [official docs](https://www.kimi.com/code/docs/en/)). Set it in `.env.local` and restart:
+
+```bash
+KIMI_CODE_ACCESS_TOKEN=your-console-api-key
+```
+
+**Option 2: Kimi CLI login state (auto-refresh)**
+
+If you've installed and logged into the Kimi CLI, Usage-Bar reads `~/.kimi-code/credentials/` automatically and refreshes the token when it expires (OAuth tokens last 15 minutes and auto-renew). Nothing to configure.
 
 ```bash
 # If you haven't logged in:
 kimi login
 ```
 
-> ⚠️ **KIMI_CODE_ACCESS_TOKEN does not auto-renew.** Auto-refresh only works when using the CLI's credential file path. If you set `KIMI_CODE_ACCESS_TOKEN` explicitly, it won't refresh after expiry — you'll need to replace it manually.
-> ```bash
-> # Fallback only (no auto-renewal) when the credential file path is unavailable:
-> KIMI_CODE_ACCESS_TOKEN=your-kimi-code-access-token
-> ```
+> ⚠️ `KIMI_CODE_ACCESS_TOKEN` does not auto-renew. If the key is revoked or stops working, the card shows `api_key_invalid` — create a new key in the Console and replace it manually. Auto-refresh only works in CLI credential-file mode.
 
 ### Configuration summary
 
@@ -104,7 +110,7 @@ kimi login
 |---|---|---|
 | **Codex** | ❌ No | Just be logged into Codex (auto-reads App Server) |
 | **GLM** | ✅ Yes | Set `GLM_CODING_PLAN_TOKEN` in `.env.local` |
-| **Kimi** | ❌ Usually no | `kimi login` (auto-read + auto-refresh) |
+| **Kimi** | ❌ Usually no | Console API key (`KIMI_CODE_ACCESS_TOKEN`) or `kimi login` (auto-read + auto-refresh) |
 
 **Note**: Kimi Code usage ≠ Moonshot Open Platform balance — they are not interchangeable.
 
@@ -138,12 +144,12 @@ Check:
 </details>
 
 <details>
-<summary><b>Kimi shows token_expired</b></summary>
+<summary><b>Kimi shows token_expired / api_key_invalid</b></summary>
 
 Depends on your configuration:
 
-- **Using `KIMI_CODE_ACCESS_TOKEN`**: this env var **does not auto-renew**. Replace it with a fresh token, or remove the env var and restart Usage-Bar to fall back to the CLI credential mode (which supports auto-refresh).
-- **Using the CLI credential file** (default): run `kimi login` to re-authenticate.
+- **Using `KIMI_CODE_ACCESS_TOKEN` (Console API key)**: `api_key_invalid` means the key is invalid or revoked. This env var **does not auto-renew** — create a new key in the Kimi Code Console and replace it, or remove the env var and restart Usage-Bar to switch to CLI credential mode (which supports auto-refresh).
+- **Using the CLI credential file**: `token_expired` means the login state is no longer valid — run `kimi login` to re-authenticate.
 </details>
 
 <details>
