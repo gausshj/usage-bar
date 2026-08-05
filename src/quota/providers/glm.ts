@@ -221,26 +221,44 @@ function describeGlmWindow(limit: GlmLimit): string {
   // the period shown via its unit/number.
   if (limit.type === 'TIME_LIMIT') {
     const period = limit.unit != null && limit.number != null
-      ? GLM_UNIT_MINUTES_LABEL(limit.unit)
+      ? formatGlmPeriod(limit.unit, limit.number)
       : null;
     return period ? `MCP tools (${period})` : 'MCP tools';
   }
   const typeLabel = limit.type === 'TOKENS_LIMIT' ? 'tokens' : limit.type;
   if (limit.unit != null && limit.number != null) {
-    const unitName = GLM_UNIT_MINUTES_LABEL(limit.unit);
-    return `${limit.number}-${unitName} (${typeLabel})`;
+    const period = formatGlmPeriod(limit.unit, limit.number);
+    return `${period} (${typeLabel})`;
   }
   return typeLabel;
 }
 
-function GLM_UNIT_MINUTES_LABEL(unit: number): string {
-  // Observed: 3=hour, 5=month, 6=day, 7=week
+/**
+ * Map a GLM `unit` enum code to a human period and fold it with the `number`
+ * count into a single readable label, e.g. "5-hour", "7-day", "1-month".
+ *
+ * IMPORTANT: GLM's `unit` is an opaque enum, NOT a minute count. The previous
+ * implementation treated it as minutes-derived and *guessed* the enum
+ * (comment: "6=day, 7=week"), which mislabeled the weekly token window. A real
+ * account returns TOKENS_LIMIT `{ number: 1, unit: 6 }` for the 7-day window —
+ * i.e. `unit 6 = week`, so "1-week" must be folded to "7-day" to match GLM's
+ * own "7天" wording and the reset timestamp (a ~7-day period, not 1-day).
+ *
+ * Verified mapping (real account, monitor API, 2026-08):
+ *   3 = hour     (5-hour token window)
+ *   5 = month    (1-month MCP tools window)
+ *   6 = week     (7-day token window — the bug source)
+ * `4`/`7` are reserved against future drift; unknown codes fall back to an
+ * explicit `unit<n>` so a new code is visibly distinct, never silently wrong.
+ */
+function formatGlmPeriod(unit: number, number: number): string {
   switch (unit) {
-    case 3: return 'hour';
-    case 5: return 'month';
-    case 6: return 'day';
-    case 7: return 'week';
-    default: return `unit${unit}`;
+    case 3: return `${number}-hour`;
+    case 4: return `${number}-day`;
+    case 5: return `${number}-month`;
+    case 6: return number === 1 ? '7-day' : `${number}-week`;
+    case 7: return `${number}-week`;
+    default: return `${number}-unit${unit}`;
   }
 }
 

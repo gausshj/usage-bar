@@ -24,18 +24,25 @@ describe('GlmProvider', () => {
   });
 
   it('maps a normal multi-window response to ready buckets', async () => {
+    // Fixture mirrors a REAL account's monitor API response (3 windows):
+    //   TIME_LIMIT  {number:1, unit:5}  → MCP tools, monthly
+    //   TOKENS_LIMIT{number:5, unit:3}  → 5-hour token window
+    //   TOKENS_LIMIT{number:1, unit:6}  → 7-day token window (the bug source)
+    // unit is an opaque enum, NOT minutes: 3=hour, 5=month, 6=week (#42).
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
       jsonResponse(200, {
         data: {
           limits: [
-            { type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 42, nextResetTime: 1785436421682 },
             {
               type: 'TIME_LIMIT', unit: 5, number: 1, percentage: 1, currentValue: 5, usage: 4000,
               usageDetails: [
                 { modelCode: 'search-prime', usage: 3 },
                 { modelCode: 'web-reader', usage: 2 },
               ],
+              nextResetTime: 1787676680997,
             },
+            { type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 1, nextResetTime: 1785949413655 },
+            { type: 'TOKENS_LIMIT', unit: 6, number: 1, percentage: 6, nextResetTime: 1786207880998 },
           ],
         },
       }),
@@ -44,19 +51,51 @@ describe('GlmProvider', () => {
     const snap = await new GlmProvider({ token: 'tok' }).fetch(null);
     expect(snap.status).toBe('ready');
     expect(snap.source.kind).toBe('official_compatibility');
-    expect(snap.buckets).toHaveLength(2);
-    expect(snap.buckets[0].usedPercent).toBe(42);
-    expect(snap.buckets[0].resetsAt).toContain('2026');
+    expect(snap.buckets).toHaveLength(3);
 
     // TIME_LIMIT is MCP tools usage (联网搜索/网页读取/开源仓库) — a monthly
     // internet/tool-call quota, NOT a monthly token quota (#37).
-    const mcp = snap.buckets[1];
-    expect(mcp.label).toBe('MCP tools (month)');
+    const mcp = snap.buckets[0];
+    expect(mcp.label).toBe('MCP tools (1-month)');
     expect(mcp.metric).toBe('requests');
     expect(mcp.used).toBe(5);
     expect(mcp.limit).toBe(4000);
     // usageDetails surfaced as a readable breakdown (#37).
     expect(mcp.details).toBe('search-prime=3, web-reader=2');
+
+    // 5-hour token window (unit 3 = hour).
+    expect(snap.buckets[1].label).toBe('5-hour (tokens)');
+
+    // 7-day token window (unit 6 = week; "1-week" folded to "7-day" to match
+    // GLM's own "7天" wording). Previously mislabeled as "1-day" (#42).
+    expect(snap.buckets[2].label).toBe('7-day (tokens)');
+    expect(snap.buckets[2].usedPercent).toBe(6);
+    expect(snap.buckets[2].resetsAt).toContain('2026');
+  });
+
+  it('labels a 1-week token window as "7-day" (GLM "7天" wording)', async () => {
+    // Regression guard for the weekly-window mislabel (#42). The previous
+    // mapping guessed unit 6 = 'day', so {number:1, unit:6} rendered as
+    // "1-day". Real semantics: unit 6 = week, and 1-week → "7-day".
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, {
+        data: { limits: [{ type: 'TOKENS_LIMIT', unit: 6, number: 1, percentage: 6 }] },
+      }),
+    );
+    const snap = await new GlmProvider({ token: 'tok' }).fetch(null);
+    expect(snap.buckets[0].label).toBe('7-day (tokens)');
+  });
+
+  it('labels a multi-week window with its count rather than folding to days', async () => {
+    // Only "1-week" folds to "7-day"; a 2-week window keeps "2-week" so the
+    // count is honest and not ambiguously large in days.
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, {
+        data: { limits: [{ type: 'TOKENS_LIMIT', unit: 6, number: 2, percentage: 10 }] },
+      }),
+    );
+    const snap = await new GlmProvider({ token: 'tok' }).fetch(null);
+    expect(snap.buckets[0].label).toBe('2-week (tokens)');
   });
 
   it('labels a TIME_LIMIT without unit/number as plain "MCP tools"', async () => {
