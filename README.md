@@ -81,7 +81,7 @@ GLM_CODING_PLAN_REGION=zai
 
 > ⚠️ `GLM_CODING_PLAN_REGION` 只能是 `bigmodel` 或 `zai`。其他值会让 GLM 卡片显示配置错误（不会静默回落到默认区域，也不影响 Codex/Kimi）。
 
-重启 `npm run dev` 后，GLM 卡片即显示真实数据（5 小时 token 窗口 + MCP 工具月度调用量）。
+重启 `npm run dev` 后，GLM 卡片即显示真实数据（5 小时 token 窗口 + 7 天 token 周额度 + MCP 工具月度调用量）。
 
 ### Kimi Code —— API Key 或 CLI 登录均可
 
