@@ -163,23 +163,7 @@ export class KimiProvider implements QuotaProviderAdapter {
   private async resolveAccessToken(): Promise<{ token: string; kind: KimiCredentialKind }> {
     // credentialId takes precedence: resolve + scope-validate via the resolver,
     // accepting either credential kind.
-    if (this.credentialId) {
-      if (!this.resolver) throw new Error('credentialId set but no resolver provided');
-      let mismatch: unknown;
-      for (const scope of EXPECTED_SCOPES) {
-        try {
-          const token = await this.resolver.reveal(this.credentialId, scope);
-          return { token, kind: scope.kind as KimiCredentialKind };
-        } catch (err) {
-          if (err instanceof CredentialScopeMismatchError) {
-            mismatch = err;
-            continue;
-          }
-          throw err;
-        }
-      }
-      throw mismatch ?? new Error('no acceptable credential kind');
-    }
+    if (this.credentialId) return this.resolveCredentialById(this.credentialId);
     if (this.accessTokenOverride) return { token: this.accessTokenOverride, kind: 'api_key' };
 
     const creds = readCredentials(this.credentialsPath);
@@ -206,6 +190,31 @@ export class KimiProvider implements QuotaProviderAdapter {
       throw new Error('kimi oauth refresh returned no access_token');
     }
     return { token: refreshed.access_token, kind: 'oauth_token' };
+  }
+
+  /**
+   * Resolve a credentialId to a token, accepting either credential kind (#40).
+   * A kind mismatch falls through to the next accepted kind; any other failure
+   * (missing, revoked) aborts immediately.
+   */
+  private async resolveCredentialById(
+    credentialId: string,
+  ): Promise<{ token: string; kind: KimiCredentialKind }> {
+    if (!this.resolver) throw new Error('credentialId set but no resolver provided');
+    let mismatch: unknown;
+    for (const scope of EXPECTED_SCOPES) {
+      try {
+        const token = await this.resolver.reveal(credentialId, scope);
+        return { token, kind: scope.kind as KimiCredentialKind };
+      } catch (err) {
+        if (err instanceof CredentialScopeMismatchError) {
+          mismatch = err;
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw mismatch ?? new Error('no acceptable credential kind');
   }
 
   // -----------------------------------------------------------------

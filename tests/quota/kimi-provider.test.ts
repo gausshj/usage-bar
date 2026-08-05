@@ -181,6 +181,17 @@ describe('KimiProvider', () => {
     expect(snap.error?.retryable).toBe(false);
   });
 
+  it('maps a credentialId matching neither accepted kind to unconfigured', async () => {
+    const resolver = {
+      reveal: vi.fn().mockRejectedValue(new CredentialScopeMismatchError('kind mismatch')),
+    };
+    const p = new KimiProvider({ credentialId: 'cred-x', resolver });
+    const snap = await p.fetch(null);
+    expect(snap.status).toBe('unconfigured');
+    expect(resolver.reveal).toHaveBeenCalledTimes(2); // tried both kinds
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   it('maps a resolver failure to a safe error without calling usages', async () => {
     const resolver = { reveal: vi.fn().mockRejectedValue(new Error('revoked')) };
     const p = new KimiProvider({ credentialId: 'cred-bad', resolver });
