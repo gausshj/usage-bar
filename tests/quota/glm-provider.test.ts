@@ -98,6 +98,29 @@ describe('GlmProvider', () => {
     expect(snap.buckets[0].label).toBe('2-week (tokens)');
   });
 
+  it('renders an unknown unit code as an explicit, non-guessed label', async () => {
+    // An unseen unit code must NOT be guessed (that caused #42) — it falls
+    // through to a visibly distinct `N-unit<code>` label instead.
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, {
+        data: { limits: [{ type: 'TOKENS_LIMIT', unit: 99, number: 3, percentage: 1 }] },
+      }),
+    );
+    const snap = await new GlmProvider({ token: 'tok' }).fetch(null);
+    expect(snap.buckets[0].label).toBe('3-unit99 (tokens)');
+  });
+
+  it('labels a TOKENS_LIMIT without unit/number as just the type', async () => {
+    // Covers the no-period branch for the tokens path (unit/number absent).
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(200, {
+        data: { limits: [{ type: 'TOKENS_LIMIT', percentage: 7 }] },
+      }),
+    );
+    const snap = await new GlmProvider({ token: 'tok' }).fetch(null);
+    expect(snap.buckets[0].label).toBe('tokens');
+  });
+
   it('labels a TIME_LIMIT without unit/number as plain "MCP tools"', async () => {
     // Covers the no-period branch: unit/number absent → label has no "(period)".
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(

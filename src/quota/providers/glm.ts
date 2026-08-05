@@ -244,20 +244,19 @@ function describeGlmWindow(limit: GlmLimit): string {
  * i.e. `unit 6 = week`, so "1-week" must be folded to "7-day" to match GLM's
  * own "7天" wording and the reset timestamp (a ~7-day period, not 1-day).
  *
- * Verified mapping (real account, monitor API, 2026-08):
+ * Only the codes seen on a real account are mapped (2026-08):
  *   3 = hour     (5-hour token window)
  *   5 = month    (1-month MCP tools window)
  *   6 = week     (7-day token window — the bug source)
- * `4`/`7` are reserved against future drift; unknown codes fall back to an
- * explicit `unit<n>` so a new code is visibly distinct, never silently wrong.
+ * Any other code falls through to an explicit `N-unit<code>` label so a new
+ * code is visibly distinct and never silently mislabeled. We deliberately do
+ * NOT guess adjacent codes (e.g. 4=day) — guessing is exactly what caused #42.
  */
 function formatGlmPeriod(unit: number, number: number): string {
   switch (unit) {
     case 3: return `${number}-hour`;
-    case 4: return `${number}-day`;
     case 5: return `${number}-month`;
     case 6: return number === 1 ? '7-day' : `${number}-week`;
-    case 7: return `${number}-week`;
     default: return `${number}-unit${unit}`;
   }
 }
